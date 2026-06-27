@@ -38,6 +38,11 @@ def headline_report(result: BacktestResult) -> str:
         f"- Config: {result.config.describe()}",
         f"- IDM: {result.idm:.2f}   FDM: {result.fdm:.2f}   instruments: "
         f"{result.per_instrument_returns.shape[1]}   days: {s['n_days']}",
+        f"- Realised vol **{s['ann_vol']:.1%}** vs {result.config.vol_target:.0%} target   "
+        f"weights: {'cluster' if result.config.cluster_weights else 'equal'}   "
+        f"governor: {'on' if result.config.use_governor else 'off'} "
+        f"(mean {result.governor.mean():.2f}×, "
+        f"range {result.governor.min():.2f}–{result.governor.max():.2f})",
         "",
         "| Metric | Net | Gross |",
         "|:--|--:|--:|",

@@ -29,6 +29,8 @@ def build_config(args) -> Config:
         use_carry=args.carry,
         cost_bps=args.cost_bps,
         buffer_fraction=args.buffer,
+        cluster_weights=args.cluster_weights,
+        use_governor=not args.no_governor,
     )
 
 
@@ -121,6 +123,18 @@ def main(argv=None) -> int:
     p.add_argument("--cost-bps", type=float, default=1.5, dest="cost_bps")
     p.add_argument("--buffer", type=float, default=0.10)
     p.add_argument("--no-breakout", action="store_true")
+    p.add_argument(
+        "--cluster-weights",
+        action="store_true",
+        dest="cluster_weights",
+        help="asset-class cluster weights (research; OFF by default — it hurt on this universe)",
+    )
+    p.add_argument(
+        "--no-governor",
+        action="store_true",
+        dest="no_governor",
+        help="disable the realised-vol governor (on by default)",
+    )
     p.add_argument("--carry", action="store_true", help="demo carry rule (synthetic series)")
     p.add_argument("--validate", action="store_true", help="run the statistical honesty suite")
     p.add_argument(

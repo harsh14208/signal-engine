@@ -51,6 +51,15 @@ DEFAULT_VOL_TARGET = 0.20  # annualised portfolio vol target (20%)
 DEFAULT_COST_BPS = 1.5  # per-side cost in bps of notional traded
 BUFFER_FRACTION = 0.10  # position buffer (× avg position) to cut turnover
 
+# ── Realised-vol governor ────────────────────────────────────────────────────
+# Forecast scalars are calibrated for futures, and the IDM assumes correlations
+# stay put — both make realised vol drift above target on real data. The governor
+# is a feedback overlay that scales the whole book by target/trailing-realised-vol
+# so realised vol actually lands near the target (and the tail shrinks with it).
+GOVERNOR_SPAN = 32  # trailing EW span for the realised-vol estimate
+GOVERNOR_MIN = 0.20  # clamp the leverage multiplier (avoid blow-up at low vol)
+GOVERNOR_MAX = 2.50
+
 
 @dataclass
 class Config:
@@ -67,6 +76,16 @@ class Config:
     fdm_cap: float = FDM_CAP
     idm_cap: float = IDM_CAP
     forecast_cap: float = FORECAST_CAP
+    # Asset-class cluster weighting is OFF by default: ablation on the real
+    # 2007–2026 universe showed it HURT (Sharpe 0.54→0.49, OOS 0.57→0.42) because
+    # equal-per-cluster overweights singleton/small clusters holding weak names
+    # (the lone −0.11-Sharpe REIT, the 2-name credit sleeve). Kept as a research
+    # flag; a correlation/Sharpe-aware version is the real fix, not asset class.
+    cluster_weights: bool = False
+    use_governor: bool = True  # realised-vol overlay; ablation win (Calmar 0.23→0.34)
+    governor_span: int = GOVERNOR_SPAN
+    governor_min: float = GOVERNOR_MIN
+    governor_max: float = GOVERNOR_MAX
     rule_weights: dict[str, float] = field(default_factory=dict)  # empty → equal
 
     def describe(self) -> str:
@@ -78,5 +97,7 @@ class Config:
         return (
             f"capital=${self.capital:,.0f} vol_target={self.vol_target:.0%} "
             f"cost={self.cost_bps}bps buffer={self.buffer_fraction:.0%} "
+            f"weights={'cluster' if self.cluster_weights else 'equal'} "
+            f"governor={'on' if self.use_governor else 'off'} "
             f"rules=[{', '.join(rules)}]"
         )

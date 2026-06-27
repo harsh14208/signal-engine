@@ -3,7 +3,12 @@
 Pipeline (no lookahead — positions decided at close t-1 earn day-t P&L):
 
     prices ─▶ returns ─▶ blended vol ─▶ rule forecasts ─▶ combine (FDM)
-           ─▶ vol-target sizing (IDM) ─▶ buffer ─▶ shift(1) ─▶ P&L − costs
+           ─▶ cluster-weighted vol-target sizing (IDM) ─▶ realised-vol governor
+           ─▶ no-trade buffer ─▶ shift(1) ─▶ P&L − costs
+
+The governor is a two-pass overlay: pass 1 simulates the raw (ungoverned) book
+to estimate its realised vol; pass 2 scales every position by a lagged
+target/realised multiplier so realised vol lands near target.
 """
 
 from __future__ import annotations
@@ -15,9 +20,10 @@ import pandas as pd
 from .config import Config
 from .forecast import combine_instrument, equal_weights, estimate_fdm, pooled_rule_correlation
 from .markets import BY_SYMBOL
-from .portfolio import apply_buffer, estimate_idm, position_units
+from .portfolio import apply_buffer, estimate_idm, position_units, vol_governor
 from .rules import carry_forecast, trend_forecasts
 from .volatility import annualise, blended_daily_vol, daily_returns
+from .weights import cluster_weights
 
 
 @dataclass
@@ -31,6 +37,8 @@ class BacktestResult:
     forecasts: pd.DataFrame  # combined forecast per instrument
     turnover: pd.Series  # daily traded-notional / capital
     instrument_corr: pd.DataFrame
+    governor: pd.Series  # applied leverage multiplier (1.0 if disabled)
+    weights: dict  # instrument risk weights actually used
     idm: float
     fdm: float
     config: Config
@@ -39,6 +47,34 @@ class BacktestResult:
 def _multiplier(sym: str) -> float:
     inst = BY_SYMBOL.get(sym)
     return inst.multiplier if inst else 1.0
+
+
+def _simulate(
+    units_unbuffered: pd.DataFrame,
+    prices: pd.DataFrame,
+    mult: pd.Series,
+    cost_bps: float,
+    capital: float,
+    buffer_fraction: float,
+) -> dict:
+    """Buffer → shift(1) → P&L − costs for a units DataFrame."""
+    buffered = pd.DataFrame(
+        {c: apply_buffer(units_unbuffered[c], buffer_fraction) for c in units_unbuffered.columns}
+    )
+    eff = buffered.shift(1)
+    price_change = prices.diff()
+    pnl = eff.mul(price_change).mul(mult, axis=1)
+    traded = eff.diff().abs().mul(prices).mul(mult, axis=1)
+    cost = traded * (cost_bps / 1e4)
+    per_inst = ((pnl - cost) / capital).fillna(0.0)
+    return {
+        "eff": eff,
+        "per_inst": per_inst,
+        "daily": per_inst.sum(axis=1),
+        "gross": (pnl / capital).sum(axis=1).fillna(0.0),
+        "notional": eff.mul(prices).mul(mult, axis=1),
+        "turnover": (traded.sum(axis=1) / capital).fillna(0.0),
+    }
 
 
 def run_backtest(
@@ -73,58 +109,67 @@ def run_backtest(
     fdm = estimate_fdm(rule_corr, equal_weights(all_rules), config.fdm_cap)
 
     # 3) combined forecast per instrument
-    combined = {
-        sym: combine_instrument(rf, equal_weights(rf.keys()), fdm, config.forecast_cap)
-        for sym, rf in per_inst.items()
-    }
-    forecasts = pd.DataFrame(combined)
+    forecasts = pd.DataFrame(
+        {
+            sym: combine_instrument(rf, equal_weights(rf.keys()), fdm, config.forecast_cap)
+            for sym, rf in per_inst.items()
+        }
+    )
 
-    # 4) instrument weights + IDM
-    inst_w = equal_weights(symbols)
-    idm = estimate_idm(returns, inst_w, config.idm_cap)
+    # 4) instrument risk weights (cluster handcrafting) + IDM
+    weights = cluster_weights(symbols) if config.cluster_weights else equal_weights(symbols)
+    idm = estimate_idm(returns, weights, config.idm_cap)
 
-    # 5) vol-target sizing + no-trade buffer
-    units = {}
-    for sym in symbols:
-        u = position_units(
-            forecasts[sym],
-            prices[sym],
-            annual_vol[sym],
-            config.capital,
-            config.vol_target,
-            inst_w[sym],
-            idm,
-            _multiplier(sym),
-        )
-        units[sym] = apply_buffer(u, config.buffer_fraction)
-    units_df = pd.DataFrame(units)
-
-    # 6) P&L (position decided at t-1 earns day-t price change) minus costs
-    eff = units_df.shift(1)
+    # 5) raw vol-target sizing (pre-governor, pre-buffer)
     mult = pd.Series({s: _multiplier(s) for s in symbols})
-    price_change = prices.diff()
+    raw_units = pd.DataFrame(
+        {
+            sym: position_units(
+                forecasts[sym],
+                prices[sym],
+                annual_vol[sym],
+                config.capital,
+                config.vol_target,
+                weights[sym],
+                idm,
+                _multiplier(sym),
+            )
+            for sym in symbols
+        }
+    )
 
-    pnl = eff.mul(price_change).mul(mult, axis=1)
-    traded = eff.diff().abs().mul(prices).mul(mult, axis=1)
-    cost = traded * (config.cost_bps / 1e4)
+    # 6) realised-vol governor (two-pass; multiplier is lagged → no lookahead)
+    if config.use_governor:
+        sim_raw = _simulate(
+            raw_units, prices, mult, config.cost_bps, config.capital, config.buffer_fraction
+        )
+        governor = vol_governor(
+            sim_raw["daily"],
+            config.vol_target,
+            config.governor_span,
+            config.governor_min,
+            config.governor_max,
+        )
+        governed = raw_units.mul(governor, axis=0)
+    else:
+        governor = pd.Series(1.0, index=prices.index)
+        governed = raw_units
 
-    per_inst_ret = ((pnl - cost) / config.capital).fillna(0.0)
-    daily_ret = per_inst_ret.sum(axis=1)
-    gross_ret = (pnl / config.capital).sum(axis=1).fillna(0.0)
-    notional = eff.mul(prices).mul(mult, axis=1)
-    turnover = (traded.sum(axis=1) / config.capital).fillna(0.0)
-    equity = (1.0 + daily_ret).cumprod()
+    sim = _simulate(governed, prices, mult, config.cost_bps, config.capital, config.buffer_fraction)
+    equity = (1.0 + sim["daily"]).cumprod()
 
     return BacktestResult(
-        daily_returns=daily_ret,
-        gross_returns=gross_ret,
+        daily_returns=sim["daily"],
+        gross_returns=sim["gross"],
         equity=equity,
-        per_instrument_returns=per_inst_ret,
-        positions=eff,
-        notional=notional,
+        per_instrument_returns=sim["per_inst"],
+        positions=sim["eff"],
+        notional=sim["notional"],
         forecasts=forecasts,
-        turnover=turnover,
+        turnover=sim["turnover"],
         instrument_corr=returns.corr(),
+        governor=governor,
+        weights=weights,
         idm=idm,
         fdm=fdm,
         config=config,

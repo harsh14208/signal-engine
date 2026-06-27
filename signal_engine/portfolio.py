@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .config import AVG_ABS_FORECAST, IDM_CAP
+from .config import ANNUAL_VOL_SQRT, AVG_ABS_FORECAST, IDM_CAP
 
 
 def estimate_idm(returns: pd.DataFrame, weights: dict[str, float], cap: float = IDM_CAP) -> float:
@@ -80,3 +80,24 @@ def apply_buffer(units: pd.Series, fraction: float) -> pd.Series:
             cur = target
         held[i] = cur
     return pd.Series(held, index=units.index)
+
+
+def vol_governor(
+    daily_returns: pd.Series,
+    target_vol: float,
+    span: int = 32,
+    lo: float = 0.20,
+    hi: float = 2.50,
+) -> pd.Series:
+    """Leverage multiplier that drags realised vol toward `target_vol`.
+
+        governor_t = clip(target_vol / trailing_realised_vol_{t-1}, [lo, hi])
+
+    The trailing realised vol is an EW estimate of the ungoverned strategy's own
+    daily returns, LAGGED one day (`.shift(1)`) so the multiplier applied on day t
+    uses only information available at t-1 — no lookahead. Clamped to avoid
+    blowing up leverage in unusually calm regimes.
+    """
+    trailing = daily_returns.ewm(span=span, min_periods=20).std() * ANNUAL_VOL_SQRT
+    gov = (target_vol / trailing.replace(0.0, np.nan)).shift(1)
+    return gov.clip(lo, hi).bfill().fillna(1.0)

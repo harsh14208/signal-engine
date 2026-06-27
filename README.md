@@ -96,7 +96,7 @@ Tests:
 
 ```bash
 pip install -e .[dev]
-pytest            # 32 tests
+pytest            # 40 tests
 ruff check signal_engine tests
 ```
 
@@ -116,10 +116,48 @@ Deflated Sharpe (100 trials)       : 0.57 < 0.77  ⚠ FAILS  (the tooling has te
 Random-walk placebo 95th pct       : 0.39  → real 0.57 ✅ clears the floor
 ```
 
-It is **not** a claim about live performance — that only comes from
-`--source yfinance` on real history (realistic target for this style is ~0.7–1.0
-gross, less after costs). The honesty tooling is the product; the synthetic
-number is a fixture.
+It is **not** a claim about live performance — that comes from `--source yfinance`
+on real history (below). The honesty tooling is the product; the synthetic number
+is a fixture.
+
+### Real-data results (`--source cache`, 2007–2026, 19 ETF proxies)
+
+Default config (trend-only, equal-weight, realised-vol governor ON) on ~4,900 days
+of actual prices:
+
+| Metric | Value |
+|---|---|
+| **Net Sharpe** | **0.65** (gross 0.69) |
+| Realised vol | 21.2% (vs 20% target) |
+| Max drawdown | −36.2% |
+| Calmar / Sortino | 0.34 / 0.88 |
+| Diversification ratio | 2.2× (mean standalone 0.25 → portfolio 0.65) |
+| Lo 95% CI | [0.20, 1.10] — SR=0 outside ✅ |
+| Block-bootstrap P5 | 0.31 > 0 ✅ |
+| Random-walk placebo | clears (0.65 vs 0.42 floor) ✅ |
+| IS / OOS (70/30) | 0.71 / 0.51 — gap +0.20 ⚠ |
+| Deflated Sharpe (100 trials) | 0.65 < 0.69 ⚠ (clears at this project's real handful of trials) |
+
+**Honest caveats:** the IS/OOS gap is wide — the governor's vol-targeting paid off
+more in the cleaner-trending 2007–2019 era than the choppy 2020–2026 hold-out
+(OOS 0.51 is still positive and within bootstrap noise of the ungoverned 0.57). It
+has **no fitted parameters**, so this is regime, not overfitting. The 100-trial
+Deflated bar is a conservative placeholder; at this project's actual handful of
+configs the bar (~0.49) is cleared.
+
+**The ablation that set the defaults** (the discipline in action):
+
+| Config | Net Sharpe | MaxDD | Calmar | OOS |
+|---|---|---|---|---|
+| baseline (equal, no governor) | 0.54 | −49% | 0.23 | 0.57 |
+| + cluster weights | 0.49 ↓ | −50% | 0.19 ↓ | 0.42 ↓ |
+| **+ governor (default)** | **0.65 ↑** | **−36% ↑** | **0.34 ↑** | 0.51 |
+
+Asset-class **cluster weighting was tested and DROPPED**: equal-per-cluster
+overweights singleton/small clusters holding weak names (the lone −0.11-Sharpe
+REIT, the 2-name credit sleeve). Shipping a plausible-but-harmful knob is the exact
+mistake the parent project made 96 times — here it's a one-line research flag
+(`--cluster-weights`), off by default. The **governor** is the validated win.
 
 ---
 
@@ -144,6 +182,8 @@ front, don't fake the result.
 ## Roadmap (only after real-data OOS + placebo pass)
 
 1. Real futures term-structure feed → genuine carry across all asset classes.
-2. Handcrafted / cluster risk weights (replace equal-weight + IDM).
+2. ~~Asset-class cluster weights~~ — *tried, hurt, dropped* (see ablation). Next:
+   a **correlation/Sharpe-aware** weighting (not asset-class), plus **governor
+   smoothing** to cut its added turnover (47x → 61x).
 3. Multiple-contract forecast mapping & roll handling.
 4. Live execution layer (broker, position reconciliation) — **last**, not first.
