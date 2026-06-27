@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Data cache (prices are re-fetchable; don't commit)
+data/*.parquet
+data/*.csv
+data/cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
