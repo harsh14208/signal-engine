@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .backtest import BacktestResult
-from .markets import BY_SYMBOL
+from .markets import instrument_for
 from .metrics import sharpe, summary
 
 
@@ -39,10 +39,15 @@ def headline_report(result: BacktestResult) -> str:
         f"- IDM: {result.idm:.2f}   FDM: {result.fdm:.2f}   instruments: "
         f"{result.per_instrument_returns.shape[1]}   days: {s['n_days']}",
         f"- Realised vol **{s['ann_vol']:.1%}** vs {result.config.vol_target:.0%} target   "
-        f"weights: {'cluster' if result.config.cluster_weights else 'equal'}   "
+        f"weights: {result.config.weight_scheme}   "
+        f"universe: {'expanded' if result.config.use_expanded_universe else 'core'}   "
         f"governor: {'on' if result.config.use_governor else 'off'} "
         f"(mean {result.governor.mean():.2f}×, "
-        f"range {result.governor.min():.2f}–{result.governor.max():.2f})",
+        f"range {result.governor.min():.2f}–{result.governor.max():.2f})   "
+        f"corr-spike: {'on' if result.config.use_corr_spike else 'off'} "
+        f"(mean {result.overlay.mean():.2f}×)   "
+        f"regime: {'on' if result.config.use_regime_overlay else 'off'} "
+        f"(mean {result.regime.mean():.2f}×)",
         "",
         "| Metric | Net | Gross |",
         "|:--|--:|--:|",
@@ -70,7 +75,8 @@ def diversification_report(result: BacktestResult) -> str:
     rows = sorted(standalone.items(), key=lambda kv: kv[1] if not np.isnan(kv[1]) else -9)
     table = ["| Instrument | Class | Standalone Sharpe |", "|:--|:--|--:|"]
     for sym, sr in reversed(rows):
-        cls = BY_SYMBOL[sym].asset_class if sym in BY_SYMBOL else "—"
+        inst = instrument_for(sym, result.config.use_expanded_universe)
+        cls = inst.asset_class if inst else "—"
         table.append(f"| {sym} | {cls} | {sr:.2f} |")
 
     lines = [

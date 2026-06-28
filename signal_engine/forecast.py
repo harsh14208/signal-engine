@@ -28,7 +28,7 @@ def estimate_fdm(
     cols = list(weights)
     if len(cols) <= 1:
         return 1.0
-    c = forecast_corr.reindex(index=cols, columns=cols).fillna(0.0).values
+    c = forecast_corr.reindex(index=cols, columns=cols).fillna(0.0).to_numpy().copy()
     np.fill_diagonal(c, 1.0)
     w = np.array([weights[k] for k in cols])
     port_var = float(w @ c @ w)
@@ -40,15 +40,22 @@ def estimate_fdm(
 def combine_instrument(
     forecasts: dict[str, pd.Series],
     weights: dict[str, float] | None = None,
-    fdm: float = 1.0,
+    fdm: float | pd.Series = 1.0,
     cap: float = FORECAST_CAP,
 ) -> pd.Series:
-    """Weighted sum of rule forecasts × FDM, capped at ±`cap`."""
+    """Weighted sum of rule forecasts × FDM, capped at ±`cap`.
+
+    `fdm` may be a scalar or a daily Series for expanding-window calibration.
+    """
     if weights is None:
         weights = equal_weights(forecasts.keys())
     df = pd.DataFrame(forecasts)
     combined = sum(df[k] * weights.get(k, 0.0) for k in df.columns)
-    return (combined * fdm).clip(-cap, cap)
+    if isinstance(fdm, pd.Series):
+        combined = combined * fdm.reindex(combined.index).fillna(1.0)
+    else:
+        combined = combined * fdm
+    return combined.clip(-cap, cap)
 
 
 def pooled_rule_correlation(per_instrument: dict[str, dict[str, pd.Series]]) -> pd.DataFrame:

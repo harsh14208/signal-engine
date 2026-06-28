@@ -11,8 +11,12 @@ venv/
 data/*.parquet
 data/*.csv
 data/cache/
+data/experiments.jsonl
 
 # OS / editor
 .DS_Store
 .vscode/
 .idea/
+
+# Serena agent workspace
+.serena/

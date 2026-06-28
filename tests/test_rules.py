@@ -3,8 +3,10 @@ import pandas as pd
 
 from signal_engine.config import DEFAULT_EWMAC_SPEEDS, FORECAST_CAP
 from signal_engine.rules import (
+    acceleration_forecast,
     breakout_forecast,
     carry_forecast,
+    cross_sectional_momentum_forecast,
     ewmac_forecast,
     trend_forecasts,
 )
@@ -45,3 +47,40 @@ def test_trend_forecasts_keys(small_prices):
     out = trend_forecasts(small_prices["SPY"], v, DEFAULT_EWMAC_SPEEDS, (40, 80))
     assert "ewmac_16_64" in out and "breakout_40" in out
     assert len(out) == len(DEFAULT_EWMAC_SPEEDS) + 2
+
+
+def test_acceleration_forecast_capped(small_prices):
+    r = daily_returns(small_prices["SPY"])
+    v = blended_daily_vol(r)
+    f = acceleration_forecast(small_prices["SPY"], v)
+    assert f.dropna().abs().max() <= FORECAST_CAP + 1e-9
+
+
+def test_acceleration_positive_in_accelerating_uptrend():
+    # Price path with increasing slope plus a little noise → positive acceleration
+    # at some point during the acceleration phase.
+    rng = np.random.default_rng(7)
+    t = np.arange(300)
+    px = pd.Series(100 * (1 + 0.0001 * t + 0.000005 * t**2) + rng.normal(0, 0.05, 300))
+    v = blended_daily_vol(px.pct_change())
+    f = acceleration_forecast(px, v)
+    assert f.dropna().max() > 0
+
+
+def test_cross_sectional_momentum_capped(small_prices):
+    f = cross_sectional_momentum_forecast(small_prices, lookback=40)
+    assert (f.abs().fillna(0) <= FORECAST_CAP + 1e-9).all().all()
+
+
+def test_cross_sectional_momentum_ranking(small_prices):
+    f = cross_sectional_momentum_forecast(small_prices, lookback=40)
+    # For each row, the instrument with the highest recent return should have
+    # the highest forecast and the lowest the lowest.
+    mom = small_prices.pct_change(40)
+    for idx in f.index[50:]:
+        row = f.loc[idx].dropna()
+        if len(row) < 2:
+            continue
+        best = row.idxmax()
+        worst = row.idxmin()
+        assert mom.loc[idx, best] >= mom.loc[idx, worst]

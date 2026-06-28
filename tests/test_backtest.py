@@ -1,6 +1,7 @@
 import numpy as np
 
-from signal_engine.backtest import BacktestResult
+from signal_engine.backtest import BacktestResult, run_backtest
+from signal_engine.config import Config
 
 
 def test_returns_result_type(result):
@@ -32,3 +33,56 @@ def test_equity_finite_and_positive(result):
 
 def test_costs_reduce_returns(result):
     assert result.gross_returns.sum() >= result.daily_returns.sum()
+
+
+def test_per_instrument_cost_scheme_reduces_net_more(result, full_prices):
+    flat = run_backtest(full_prices, Config(cost_scheme="flat"))
+    inst = run_backtest(full_prices, Config(cost_scheme="instrument"))
+    # Gross returns are identical; the instrument-specific cost scheme must not
+    # produce higher net returns than the flat scheme on average (it charges more
+    # for the less-liquid names in the universe).
+    assert inst.gross_returns.sum() >= inst.daily_returns.sum()
+    assert flat.gross_returns.sum() >= flat.daily_returns.sum()
+    # Net costs: flat total costs should be <= instrument-scheme total costs.
+    flat_cost = (flat.gross_returns - flat.daily_returns).sum()
+    inst_cost = (inst.gross_returns - inst.daily_returns).sum()
+    assert inst_cost >= flat_cost - 1e-6
+
+
+def test_first_entry_trade_is_charged_cost(full_prices):
+    """The initial position build-up must appear in turnover, not be dropped."""
+    cfg = Config(buffer_fraction=0.0)  # disable buffer so we can observe raw entry
+    res = run_backtest(full_prices, cfg)
+    # Find the first day where positions move from zero (after the warm-up) to
+    # non-zero.  That transition is the initial entry and should carry cost.
+    notional = res.notional
+    first_trade_idx = None
+    for i in range(1, len(notional)):
+        if notional.iloc[i].abs().sum() > 0 and notional.iloc[i - 1].abs().sum() == 0:
+            first_trade_idx = i
+            break
+    assert first_trade_idx is not None
+    assert res.turnover.iloc[first_trade_idx] > 0.0
+    # Without the fix the diff() from the first NaN row produced NaN cost.
+    assert np.isfinite(res.turnover.iloc[first_trade_idx])
+
+
+def test_expanding_calibration_uses_no_future_data(full_prices):
+    """With a calibration horizon beyond the sample, parameters stay neutral."""
+    cfg = Config(calibration_min_obs=len(full_prices) + 1)
+    res = run_backtest(full_prices, cfg)
+    assert res.idm == 1.0
+    assert res.fdm == 1.0
+    n = len(res.weights)
+    assert abs(sum(res.weights.values()) - 1.0) < 1e-9
+    # Equal weights when calibration never triggers.
+    assert max(abs(v - 1.0 / n) for v in res.weights.values()) < 1e-9
+
+
+def test_default_run_uses_expanding_calibration(full_prices):
+    """The default run_backtest should estimate final IDM/FDM from history only."""
+    res = run_backtest(full_prices)
+    # On the synthetic low-correlation panel diversification is meaningful.
+    assert res.idm >= 1.0
+    assert res.fdm >= 1.0
+    assert abs(sum(res.weights.values()) - 1.0) < 1e-6

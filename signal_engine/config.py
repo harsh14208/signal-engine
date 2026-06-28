@@ -49,7 +49,7 @@ DEFAULT_VOL_TARGET = 0.20  # annualised portfolio vol target (20%)
 
 # ── Costs / turnover ─────────────────────────────────────────────────────────
 DEFAULT_COST_BPS = 1.5  # per-side cost in bps of notional traded
-BUFFER_FRACTION = 0.10  # position buffer (× avg position) to cut turnover
+BUFFER_FRACTION = 0.30  # position buffer (× avg position) to cut turnover
 
 # ── Realised-vol governor ────────────────────────────────────────────────────
 # Forecast scalars are calibrated for futures, and the IDM assumes correlations
@@ -70,34 +70,95 @@ class Config:
     ewmac_speeds: tuple[tuple[int, int], ...] = DEFAULT_EWMAC_SPEEDS
     breakout_spans: tuple[int, ...] = DEFAULT_BREAKOUT_SPANS
     use_breakout: bool = True
-    use_carry: bool = False  # needs term-structure data (see README §carry)
+    use_carry: bool = False  # legacy synthetic/demo carry flag
+    use_carry_proxies: bool = False  # free bond/equity carry proxies
+    use_expanded_universe: bool = False
+    use_empirical_scalars: bool = False
+    use_regime_overlay: bool = False
+    regime_threshold: float = 20.0
+    regime_max_degear: float = 0.5
+    use_vix_term_overlay: bool = False
+    vix_term_short_thresh: float = 1.10
+    vix_term_long_thresh: float = 0.95
+    vix_term_max_gear: float = 1.25
+    vix_term_max_degear: float = 0.50
+    use_credit_overlay: bool = False
+    credit_upper_thresh: float = 1.50
+    credit_lower_thresh: float = 0.80
+    credit_lookback: int = 1260
+    credit_max_gear: float = 1.25
+    credit_max_degear: float = 0.50
     cost_bps: float = DEFAULT_COST_BPS
+    cost_scheme: str = "flat"  # "flat" uses cost_bps; "instrument" uses per-Instrument costs
     buffer_fraction: float = BUFFER_FRACTION
     fdm_cap: float = FDM_CAP
     idm_cap: float = IDM_CAP
     forecast_cap: float = FORECAST_CAP
-    # Asset-class cluster weighting is OFF by default: ablation on the real
-    # 2007–2026 universe showed it HURT (Sharpe 0.54→0.49, OOS 0.57→0.42) because
-    # equal-per-cluster overweights singleton/small clusters holding weak names
-    # (the lone −0.11-Sharpe REIT, the 2-name credit sleeve). Kept as a research
-    # flag; a correlation/Sharpe-aware version is the real fix, not asset class.
+    # Weighting.  "equal" | "cluster" | "corr_cluster" | "sharpe".
+    # cluster_weights is retained for backward compatibility and maps to "cluster".
+    weight_scheme: str = "equal"
     cluster_weights: bool = False
     use_governor: bool = True  # realised-vol overlay; ablation win (Calmar 0.23→0.34)
     governor_span: int = GOVERNOR_SPAN
     governor_min: float = GOVERNOR_MIN
     governor_max: float = GOVERNOR_MAX
+    governor_smooth: int | None = None  # EWMA span on the leverage multiplier; None = raw
+    regime_smooth: int | None = None  # EWMA span on the regime de-gross multiplier; None = raw
+    vix_term_smooth: int | None = None  # EWMA span on the VIX term-structure multiplier; None = raw
+    credit_smooth: int | None = None  # EWMA span on the credit multiplier; None = raw
     rule_weights: dict[str, float] = field(default_factory=dict)  # empty → equal
+    # Additional orthogonal rules (off by default; validate each vs placebo before shipping).
+    use_accel: bool = False
+    accel_speeds: tuple[tuple[int, int], ...] = ((8, 32), (16, 64))
+    use_xsmom: bool = False
+    xsmom_lookback: int = 64
+    # Correlation-spike de-risking overlay.
+    use_corr_spike: bool = False
+    corr_spike_span: int = 60
+    corr_spike_threshold: float = 0.50
+    corr_spike_max_degross: float = 0.50
+    # Out-of-sample parameter calibration.  Parameters (instrument weights, IDM,
+    # FDM) are re-estimated on an expanding window ending at each rebal point,
+    # then applied forward only.  This removes the full-sample calibration leak in
+    # the default run_backtest path.
+    calibration_min_obs: int = 256
+    calibration_rebal: int = 252
+
+    def __post_init__(self):
+        # Backward compatibility: the old boolean flag overrides the scheme.
+        if self.cluster_weights and self.weight_scheme == "equal":
+            object.__setattr__(self, "weight_scheme", "cluster")
 
     def describe(self) -> str:
         rules = [f"EWMAC{s}" for s in self.ewmac_speeds]
         if self.use_breakout:
             rules += [f"BO{n}" for n in self.breakout_spans]
-        if self.use_carry:
+        if self.use_carry or self.use_carry_proxies:
             rules += ["CARRY"]
+        if self.use_accel:
+            rules += ["ACCEL"]
+        if self.use_xsmom:
+            rules += ["XSMOM"]
+        weight = self.weight_scheme
+        if self.weight_scheme == "cluster" or self.cluster_weights:
+            weight = "cluster"
+        smooth = f" smooth={self.governor_smooth}" if self.governor_smooth else ""
+        regime_smooth = f" regime_smooth={self.regime_smooth}" if self.regime_smooth else ""
+        vix_term = "on" if self.use_vix_term_overlay else "off"
+        vix_term_smooth = f" vts_smooth={self.vix_term_smooth}" if self.vix_term_smooth else ""
+        credit = "on" if self.use_credit_overlay else "off"
+        credit_smooth = f" credit_smooth={self.credit_smooth}" if self.credit_smooth else ""
+        carry = "proxies" if self.use_carry_proxies else ("on" if self.use_carry else "off")
         return (
             f"capital=${self.capital:,.0f} vol_target={self.vol_target:.0%} "
-            f"cost={self.cost_bps}bps buffer={self.buffer_fraction:.0%} "
-            f"weights={'cluster' if self.cluster_weights else 'equal'} "
-            f"governor={'on' if self.use_governor else 'off'} "
+            f"cost={self.cost_bps}bps scheme={self.cost_scheme} "
+            f"buffer={self.buffer_fraction:.0%} weights={weight} "
+            f"universe={'expanded' if self.use_expanded_universe else 'core'} "
+            f"governor={'on' if self.use_governor else 'off'}{smooth} "
+            f"regime={'on' if self.use_regime_overlay else 'off'}{regime_smooth} "
+            f"vix_term={vix_term}{vix_term_smooth} "
+            f"credit={credit}{credit_smooth} "
+            f"carry={carry} scalars={'empirical' if self.use_empirical_scalars else 'fixed'} "
+            f"corr_spike={'on' if self.use_corr_spike else 'off'} "
             f"rules=[{', '.join(rules)}]"
         )

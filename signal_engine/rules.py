@@ -11,6 +11,8 @@ Rules implemented:
   • Breakout — position within an N-day high/low channel (a second, weakly
              correlated trend family).
   • Carry  — risk-adjusted expected return from holding (term-structure driven).
+  • Acceleration — trend curvature (fast EWMAC minus slow EWMAC).
+  • Cross-sectional momentum — relative strength rank across the panel.
 """
 
 from __future__ import annotations
@@ -87,6 +89,38 @@ def carry_forecast(
     """
     raw = annualised_carry / annual_return_vol.replace(0.0, np.nan)
     return _cap(raw * scalar, cap)
+
+
+def acceleration_forecast(
+    prices: pd.Series,
+    daily_return_vol: pd.Series,
+    fast_pair: tuple[int, int] = (8, 32),
+    slow_pair: tuple[int, int] = (16, 64),
+    cap: float = FORECAST_CAP,
+) -> pd.Series:
+    """Trend curvature: fast EWMAC minus slow EWMAC.
+
+    Each leg is already scaled to mean |f| ≈ 10, so the difference is a
+    naturally normalised acceleration signal.
+    """
+    fast = ewmac_forecast(prices, daily_return_vol, fast_pair[0], fast_pair[1], cap=cap)
+    slow = ewmac_forecast(prices, daily_return_vol, slow_pair[0], slow_pair[1], cap=cap)
+    return (fast - slow).clip(-cap, cap)
+
+
+def cross_sectional_momentum_forecast(
+    prices: pd.DataFrame, lookback: int = 64, cap: float = FORECAST_CAP
+) -> pd.DataFrame:
+    """Relative momentum: rank recent total returns across the panel.
+
+    Percentile ranks per day are mapped linearly to [-cap, +cap]. The resulting
+    forecast is cross-sectionally neutral (zero mean across instruments each day)
+    and has a fixed cross-sectional mean |f| of cap/2 ≈ 10.
+    """
+    mom = prices.pct_change(lookback)
+    rank = mom.rank(axis=1, pct=True)
+    forecast = (rank - 0.5) * 2.0 * cap
+    return forecast
 
 
 def trend_forecasts(

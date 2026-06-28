@@ -26,47 +26,98 @@ class Instrument:
     multiplier: float = 1.0  # contract multiplier; 1.0 for ETF shares
     kind: str = "etf"  # "etf" | "future"
     carry_kind: str | None = None  # "bond_slope" | "term_structure" | None
+    cost_bps: float = 1.5  # per-side cost in bps of notional traded
 
 
 # Curated low-correlation set. ETF proxies → clean free data.
+# Per-instrument costs are rough per-side spreads for the ETF proxies; the
+# default run still uses the flat Config.cost_bps unless --cost-scheme instrument.
 UNIVERSE: tuple[Instrument, ...] = (
     # Equity (geographically diversified so they aren't one bet)
-    Instrument("SPY", "US large cap", "equity"),
-    Instrument("IWM", "US small cap", "equity"),
-    Instrument("EFA", "Developed ex-US", "equity"),
-    Instrument("EEM", "Emerging markets", "equity"),
-    Instrument("EWJ", "Japan", "equity"),
+    Instrument("SPY", "US large cap", "equity", cost_bps=1.0),
+    Instrument("IWM", "US small cap", "equity", cost_bps=1.5),
+    Instrument("EFA", "Developed ex-US", "equity", cost_bps=2.0),
+    Instrument("EEM", "Emerging markets", "equity", cost_bps=3.0),
+    Instrument("EWJ", "Japan", "equity", cost_bps=2.0),
     # Rates / bonds
-    Instrument("TLT", "US 20y+ Treasury", "bond", carry_kind="bond_slope"),
-    Instrument("IEF", "US 7-10y Treasury", "bond", carry_kind="bond_slope"),
-    Instrument("TIP", "US TIPS", "bond", carry_kind="bond_slope"),
+    Instrument("TLT", "US 20y+ Treasury", "bond", carry_kind="bond_slope", cost_bps=1.0),
+    Instrument("IEF", "US 7-10y Treasury", "bond", carry_kind="bond_slope", cost_bps=1.0),
+    Instrument("TIP", "US TIPS", "bond", carry_kind="bond_slope", cost_bps=1.0),
     # Commodities
-    Instrument("GLD", "Gold", "commodity"),
-    Instrument("SLV", "Silver", "commodity"),
-    Instrument("DBC", "Broad commodities", "commodity"),
-    Instrument("USO", "WTI crude", "commodity"),
-    Instrument("DBA", "Agriculture", "commodity"),
+    Instrument("GLD", "Gold", "commodity", cost_bps=1.0),
+    Instrument("SLV", "Silver", "commodity", cost_bps=2.5),
+    Instrument("DBC", "Broad commodities", "commodity", cost_bps=2.0),
+    Instrument("USO", "WTI crude", "commodity", cost_bps=3.0),
+    Instrument("DBA", "Agriculture", "commodity", cost_bps=2.5),
     # FX (vs USD)
     Instrument("UUP", "US dollar index", "fx"),
     Instrument("FXE", "Euro", "fx"),
     Instrument("FXY", "Japanese yen", "fx"),
     # Credit
-    Instrument("HYG", "US high yield", "credit"),
-    Instrument("LQD", "US investment grade", "credit"),
+    Instrument("HYG", "US high yield", "credit", cost_bps=2.0),
+    Instrument("LQD", "US investment grade", "credit", cost_bps=1.5),
     # Real estate
-    Instrument("VNQ", "US REITs", "real_estate"),
+    Instrument("VNQ", "US REITs", "real_estate", cost_bps=2.5),
+)
+
+# Expanded free-ETF universe. Thin/young ETFs are automatically filtered by the
+# >300-bar rule in data.load_prices, so adding candidates is cheap.
+EXPANDED_UNIVERSE: tuple[Instrument, ...] = UNIVERSE + (
+    # More equity regions / factors
+    Instrument("FXI", "China large cap", "equity", cost_bps=2.5),
+    Instrument("EWG", "Germany", "equity", cost_bps=2.0),
+    Instrument("EWZ", "Brazil", "equity", cost_bps=3.0),
+    Instrument("INDA", "India", "equity", cost_bps=3.0),
+    Instrument("EWC", "Canada", "equity", cost_bps=2.0),
+    Instrument("EWT", "Taiwan", "equity", cost_bps=2.5),
+    Instrument("EWY", "South Korea", "equity", cost_bps=2.5),
+    Instrument("EIDO", "Indonesia", "equity", cost_bps=3.5),
+    # More rates / credit
+    Instrument("SHY", "US 1-3y Treasury", "bond", carry_kind="bond_slope", cost_bps=1.0),
+    Instrument("EMB", "USD emerging-market bonds", "bond", cost_bps=2.5),
+    Instrument("BWX", "Intl Treasury", "bond", cost_bps=2.0),
+    Instrument("JNK", "US high yield", "credit", cost_bps=2.0),
+    Instrument("VCIT", "Intermediate corp credit", "credit", cost_bps=1.5),
+    # More commodities
+    Instrument("CORN", "Corn", "commodity", cost_bps=3.0),
+    Instrument("WEAT", "Wheat", "commodity", cost_bps=3.0),
+    Instrument("SOYB", "Soybeans", "commodity", cost_bps=3.0),
+    Instrument("UNG", "Natural gas", "commodity", cost_bps=3.0),
+    Instrument("CPER", "Copper", "commodity", cost_bps=2.5),
+    # More FX
+    Instrument("FXB", "British pound", "fx"),
+    Instrument("FXA", "Australian dollar", "fx"),
+    Instrument("FXC", "Canadian dollar", "fx"),
+    Instrument("FXS", "Swedish krona", "fx"),
+    # Global real estate
+    Instrument("REET", "Global REITs", "real_estate", cost_bps=2.5),
 )
 
 BY_SYMBOL: dict[str, Instrument] = {i.symbol: i for i in UNIVERSE}
+BY_SYMBOL_EXPANDED: dict[str, Instrument] = {i.symbol: i for i in EXPANDED_UNIVERSE}
 
 
-def symbols() -> list[str]:
-    return [i.symbol for i in UNIVERSE]
+def symbols(expanded: bool = False) -> list[str]:
+    src = EXPANDED_UNIVERSE if expanded else UNIVERSE
+    return [i.symbol for i in src]
 
 
-def asset_classes() -> dict[str, list[str]]:
+def asset_classes(expanded: bool = False) -> dict[str, list[str]]:
     """symbol → group, used for cluster-aware weighting and reporting."""
+    src = EXPANDED_UNIVERSE if expanded else UNIVERSE
     out: dict[str, list[str]] = {}
-    for inst in UNIVERSE:
+    for inst in src:
         out.setdefault(inst.asset_class, []).append(inst.symbol)
     return out
+
+
+def instrument_for(symbol: str, expanded: bool = False) -> Instrument | None:
+    """Return the Instrument metadata for a symbol, or None if unknown."""
+    src = BY_SYMBOL_EXPANDED if expanded else BY_SYMBOL
+    return src.get(symbol)
+
+
+def cost_per_symbol(expanded: bool = False) -> dict[str, float]:
+    """symbol → per-side cost in bps."""
+    src = BY_SYMBOL_EXPANDED if expanded else BY_SYMBOL
+    return {sym: inst.cost_bps for sym, inst in src.items()}

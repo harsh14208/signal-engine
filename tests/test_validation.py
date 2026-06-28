@@ -7,6 +7,7 @@ from signal_engine.validation import (
     block_bootstrap_sharpe,
     lo_sharpe_ci,
     placebo_sharpes,
+    purged_walk_forward,
     random_walk_panel,
 )
 
@@ -47,3 +48,23 @@ def test_placebo_floor_near_zero():
     )
     assert out["n_placebo"] >= 1
     assert abs(out["mean"]) < 0.6  # centered near zero, not a structural edge
+
+
+def test_walk_forward_folds_are_chronological(small_prices):
+    cfg = Config()
+    out = purged_walk_forward(small_prices, cfg, n_splits=3)
+    assert not out.get("insufficient")
+    assert out["n_folds"] >= 1
+    for f in out["folds"]:
+        assert f["test_start"] > f["train_end"]
+
+
+def test_walk_forward_embargo_creates_gap(small_prices):
+    cfg = Config()
+    out = purged_walk_forward(small_prices, cfg, n_splits=4, embargo_frac=0.02)
+    assert not out.get("insufficient")
+    # The test window should start strictly after the train end.
+    for f in out["folds"]:
+        train_end_idx = small_prices.index.get_loc(pd.Timestamp(f["train_end"]))
+        test_start_idx = small_prices.index.get_loc(pd.Timestamp(f["test_start"]))
+        assert test_start_idx > train_end_idx

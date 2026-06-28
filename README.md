@@ -159,6 +159,22 @@ REIT, the 2-name credit sleeve). Shipping a plausible-but-harmful knob is the ex
 mistake the parent project made 96 times — here it's a one-line research flag
 (`--cluster-weights`), off by default. The **governor** is the validated win.
 
+### Optional macro overlays (off by default)
+
+Two free-data overlays were tested and **left opt-in** because neither improves
+the ship candidate on honest OOS grounds:
+
+- `--vix-term-overlay` uses the VIX term structure (`^VIX9D` / `^VIX` and
+  `^VIX3M` / `^VIX`). On top of `--ship-candidate` it produced net SR 0.72
+  (vs 0.74), OOS 0.68 (vs 0.72), and slightly higher turnover.
+- `--credit-overlay` uses Moody's Baa−10Y spread (`BAA10Y`) from FRED as a
+  long-history credit risk premium. A small grid search found a tuned setup
+  statistically tied with the ship candidate, so it is treated as no improvement
+  and kept as a research flag.
+
+Both are wired through the same no-lookahead overlay path as the VIX/drawdown
+regime overlay and are available for further experimentation.
+
 ---
 
 ## §carry — the data-honesty note (the §84 lesson, applied from day one)

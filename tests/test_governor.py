@@ -42,3 +42,13 @@ def test_governor_improves_vol_targeting():
     # in a sane band around it.
     assert abs(on - target) <= abs(off - target) + 0.02
     assert 0.12 < on < 0.30
+
+
+def test_governor_smoothing_reduces_daily_changes():
+    r = pd.Series(np.random.default_rng(4).normal(0, 0.01, 800))
+    raw = vol_governor(r, 0.20, smooth=None)
+    smooth = vol_governor(r, 0.20, smooth=8)
+    raw_changes = raw.diff().abs().sum()
+    smooth_changes = smooth.diff().abs().sum()
+    assert smooth_changes < raw_changes
+    assert (smooth >= 0.20 - 1e-9).all() and (smooth <= 2.50 + 1e-9).all()

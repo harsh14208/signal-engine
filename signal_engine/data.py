@@ -92,7 +92,10 @@ def _fetch_yfinance(symbols: list[str], start: str, end: str | None) -> pd.DataF
     import yfinance as yf  # lazy: never imported in tests/synthetic path
 
     raw = yf.download(symbols, start=start, end=end, auto_adjust=True, progress=False, threads=True)
-    px = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
+    if isinstance(raw.columns, pd.MultiIndex):
+        px = raw["Close"]
+    else:
+        px = raw[["Close"]].rename(columns={"Close": symbols[0]})
     if isinstance(px, pd.Series):
         px = px.to_frame(symbols[0])
     return px
@@ -116,8 +119,12 @@ def load_prices(
     if source in ("cache", "auto") and os.path.exists(path):
         px = pd.read_parquet(path)
         missing = [s for s in symbols if s not in px.columns]
-        if not missing or source == "cache":
+        if not missing:
             return _clean(px.reindex(columns=symbols).dropna(how="all", axis=1))
+        if source == "cache":
+            raise FileNotFoundError(
+                f"Cached prices at {path} missing requested symbols: {missing}"
+            )
 
     if source in ("yfinance", "auto"):
         px = _fetch_yfinance(symbols, start, end)

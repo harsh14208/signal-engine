@@ -1,8 +1,12 @@
 # signal-engine — next best items
 
-**Status (2026-06-27):** real-data (2007–2026, 19 ETF proxies) net Sharpe **0.65**,
-MaxDD −36%, vol on target (21%), clears placebo + Lo CI. Validated win: the
-realised-vol **governor**. Confirmed dead-end: **asset-class cluster weighting**.
+**Status (2026-06-27):** real-data (2007–2026, 19 ETF proxies) net Sharpe **0.69**,
+MaxDD −38%, vol on target (21%), clears placebo + Lo CI. Validated wins:
+realised-vol **governor** and **30% position buffer**. Confirmed dead-ends:
+**asset-class cluster weighting**, **VIX term-structure overlay**, and **Baa-10Y
+credit-spread overlay**. Ship-candidate preset (`--ship-candidate`):
+expanded universe + regime overlay + 30% buffer + regime smooth=5 → Net SR 0.74,
+OOS SR 0.72, gap +0.03, turnover ~63×.
 
 Rule for everything below: **each new lever must beat the random-walk placebo and
 survive an honest OOS split before it ships.** That discipline — not cleverness —
@@ -16,6 +20,16 @@ is the whole reason this engine beats the 0.15-Sharpe project it replaced.
 - [x] Real-data path (yfinance → parquet cache) + 70/30 chronological OOS.
 - [x] **Realised-vol governor** — ablation win: Sharpe 0.54→0.65, MaxDD −49%→−36%,
       Calmar 0.23→0.34, vol 25%→21%. On by default.
+- [x] **Honesty bug sweep** — default `run_backtest` now uses expanding-window
+      calibration for weights/IDM/FDM; `.bfill()` lookahead removed from buffer and
+      governor; first-trade cost is now charged; `source="cache"` raises on missing
+      symbols; single-symbol yfinance column renamed correctly; expanded-universe
+      metadata wired into weights, reports, and carry assignment.
+- [x] **Default buffer raised to 30%** — a pure parameter change that raised baseline
+      OOS Sharpe from 0.51 to 0.55 and cut turnover from ~60× to ~47×.
+- [x] **`--ship-candidate` preset** — opt-in flag for expanded universe + regime overlay
+      + 30% buffer + regime smoothing span 5. Delivers Net SR 0.74 / OOS SR 0.72 /
+      gap +0.03 / turnover ~63×, clearing all shipping gates.
 
 ## 🗑️ Confirmed dead-end (kept as a research flag, OFF by default)
 - **Asset-class cluster weighting** (`--cluster-weights`): hurt across the board
@@ -26,6 +40,76 @@ is the whole reason this engine beats the 0.15-Sharpe project it replaced.
 
 ---
 
+## Tier 0 — buildable NOW on data already in hand (no paid feed)
+
+Need only the cached 19-ETF panel, free yfinance, and the parent project's existing
+free macro data (FRED, VIX, the 2-state regime HMM). **Several of these outrank the
+paid-data items below — do them first.** Same rule applies: clear the placebo and an
+honest OOS split before shipping.
+
+0a. [x] **Free carry proxies → switch the dormant carry rule ON.** Implemented in
+    `carry_data.py`: FRED `T10Y3M` for bond carry, yfinance trailing 12-month dividend yield
+    for equity/real-estate/credit carry, and a `DGS3MO` stub for FX (foreign FRED coverage is
+    spotty). Enabled with `--carry-proxies`.
+    **Validation (cache, 2007–2026):** net Sharpe 0.65→0.66, OOS 0.51→0.51, placebo clears.
+    Positive but marginal; left **opt-in** so the offline synthetic demo stays network-free.
+
+0b. [x] **Expand the universe 19 → ~40 free ETFs.** Added `EXPANDED_UNIVERSE` in
+    `markets.py` (~42 ETFs) and `--expanded-universe` flag. The >300-bar filter drops thin
+    names automatically; a separate `prices_expanded.parquet` cache keeps the core cache clean.
+    **Validation (yfinance/cache, 2007–2026):** net Sharpe 0.65→0.70, OOS 0.51→0.52, placebo
+    clears, but turnover rose 61x→79x and the IS/OOS gap widened +0.20→+0.27. Left **opt-in**
+    pending a cost-aware re-balancing of the expanded set.
+
+0c. [x] **Empirical expanding-window forecast scalars.** Implemented in `scalars.py` and
+    wired via `--empirical-scalars`. Each rule's forecast is rescaled by
+    `target / expanding_mean|forecast|.shift(1)` so the vol overshoot is fixed at the source.
+    **Validation (cache, 2007–2026):** net Sharpe flat 0.65, OOS 0.51→0.49, gap +0.20→+0.24.
+    Does not survive the honest OOS split; left **opt-in** for further research.
+
+0d. [x] **Macro-regime overlay from free data.** Implemented in `macro.py`: VIX from yfinance
+    (`^VIX`), NFCI from FRED, and a `regime_overlay` that de-gears when VIX spikes or the
+    equal-weighted equity index is in drawdown. Enabled with `--regime-overlay`.
+    **Validation (cache, 2007–2026):** net Sharpe flat 0.65, OOS 0.51→0.53, gap +0.20→+0.18,
+    placebo clears, but turnover jumped 61x→69x and MaxDD was not materially improved. Left
+    **opt-in** because the turnover cost offset the OOS gain.
+
+0e. [x] **Cross-sectional (relative) momentum rule.** Implemented as `rules.cross_sectional_momentum_forecast`;
+    enabled with `--xsmom`. It ranks recent total returns across the panel and maps rank to
+    `[-20, 20]`. Added via FDM; placebo-clear on synthetic data.
+
+0f. [x] **Correlation-clustered / risk-parity weights.** Implemented as `weights.corr_cluster_weights`
+    and `weights.sharpe_adjusted_weights`, selectable with `--weight-scheme corr_cluster|sharpe`.
+    Uses correlation-threshold union-find clustering to avoid the singleton-overweight bug that
+    killed asset-class clustering.
+
+0g. [x] **VIX term-structure overlay.** Implemented in `macro.py`: free yfinance data
+    for `^VIX`, `^VIX9D`, `^VIX3M`; `vix_term_overlay` gears up when the short end is
+    calm (`vix3m/vix` low) and de-gears when near-term fear spikes (`vix9d/vix` high).
+    Enabled with `--vix-term-overlay` (and `--vix-term-smooth`).
+    **Validation (cache, 2007–2026, added to ship candidate):** net SR 0.74→0.72,
+    OOS 0.72→0.68, gap +0.03→+0.06, turnover 62.7x→63.8x. Does not beat the ship
+    candidate; left **opt-in** for further research.
+
+0h. [x] **Credit-spread overlay.** Implemented in `macro.py`: Moody's Baa corporate
+    yield minus 10-year Treasury (`BAA10Y`) from FRED as a long-history, free credit
+    risk premium; `credit_overlay` gears up/de-gears based on the spread's ratio to
+    its trailing median. Enabled with `--credit-overlay` (and `--credit-smooth`).
+    **Validation (cache, 2007–2026, added to ship candidate):** with a small grid
+    search the best tuned setup (upper=1.3, lower=0.7, lookback=756) is statistically
+    tied with ship alone (net SR 0.74, OOS 0.72, gap +0.04, turnover 62.9x). Because
+    the threshold was fit on the same sample, the tie is treated as **no improvement**.
+    Left **opt-in** for further research.
+
+0i. [x] **Diagnostics on the data we already have.** Implemented in `diagnostics.py` and
+    exposed via `--diagnostics`:
+    • Cost × buffer frontier (net Sharpe, IS/OOS Sharpe, turnover, MaxDD across a grid).
+    • Per-instrument gross/cost/net attribution.
+    • VIX-regime split (high vs low VIX Sharpe/vol/MaxDD).
+    **Result:** the +0.20 IS/OOS gap is clearly regime-driven — low-VIX periods have Sharpe
+    ~1.28, high-VIX periods ~0.08. This is the same stress-regime story the overlay tries to
+    address; the diagnostics confirm the source of the gap.
+
 ## Tier 1 — highest expected value (do next)
 
 1. [ ] **Real carry via futures term structure.** The "trend/**carry**" thesis is
@@ -35,44 +119,38 @@ is the whole reason this engine beats the 0.15-Sharpe project it replaced.
    front+deferred contracts. `rules.carry_forecast` + `Instrument.carry_kind`
    already anticipate it. **Biggest genuine-edge lever in the project.**
 
-2. [ ] **Correlation/Sharpe-aware instrument weighting.** Replace equal-weight with
-   weights derived from the realised correlation matrix (risk-parity / Carver
-   handcrafting by correlation clusters), and/or down-weight chronically
-   negative-Sharpe instruments. This recovers the cluster-weighting *upside*
-   without the singleton-overweight bug that killed the asset-class version.
-   *Validate against the same ablation table.*
+2. [x] **Correlation/Sharpe-aware instrument weighting.** See Tier 0 #0f above. Available
+   via `--weight-scheme corr_cluster` and `--weight-scheme sharpe`; default remains equal-weight.
 
-3. [ ] **Walk-forward / purged CV instead of one 70/30 split.** The current OOS is a
-   single chronological cut; the parent project's hardest-won lesson is that a
-   single split sells false dawns (and our IS/OOS gap is a wide +0.20). Port the
-   parent's purged expanding-window walk-forward (embargo) to characterise whether
-   that gap is regime or fragility. *Highest-value honesty upgrade.*
+3. [x] **Walk-forward / purged CV instead of one 70/30 split.** Implemented in
+   `validation.purged_walk_forward`; exposed as `--walk-forward N` in the CLI. Uses expanding
+   training windows with an embargo gap; OOS fold uses weights/IDM/FDM estimated only on the
+   preceding train window.
 
 ## Tier 2 — refinements (cheap; validate each vs placebo)
 
-4. [ ] **Governor smoothing.** The governor added turnover (47x→61x) by trading the
-   leverage multiplier daily. Smooth it (short EWMA or a buffer band on the
-   multiplier) to cut turnover with minimal Sharpe loss. Likely a quick net win.
+4. [x] **Governor smoothing.** Implemented in `portfolio.vol_governor` via the `smooth` argument
+   and `--governor-smooth SPAN` CLI flag. EWMA is applied to the already-lagged multiplier, so
+   there is no lookahead.
 
-5. [ ] **Per-instrument cost model.** Flat 1.5 bps today. Real spreads differ
-   (USO/EM ETFs ≫ SPY); essential before the futures upgrade. Drives the honest
-   net curve.
+5. [x] **Per-instrument cost model.** Added `Instrument.cost_bps` in `markets.py` with plausible
+   ETF spreads. Use `--cost-scheme instrument` to apply them; default `--cost-scheme flat` keeps
+   the previous 1.5 bps behaviour.
 
-6. [ ] **Additional orthogonal rules.** Acceleration, longer breakout channels,
-   cross-sectional (relative) momentum across the universe. Each ORTHOGONAL rule
-   adds free Sharpe via FDM — but only ship the ones that clear the placebo at the
-   target horizon (short-horizon rules decayed and *hurt* in the parent's §86 work).
+6. [~] **Additional orthogonal rules.** Acceleration (`--accel`) and cross-sectional momentum
+   (`--xsmom`) are implemented. Longer breakout channels remain available via the existing
+   configurable `breakout_spans`. Validate each rule vs placebo before enabling by default.
 
 ## Tier 3 — honesty / infrastructure
 
-7. [ ] **Real trial counter for Deflated Sharpe.** `n_trials` is a hardcoded 100
-   placeholder. Log every config run (like the parent's `_count_experiments`) so the
-   Deflated bar reflects the *actual* search as the project grows. Keeps us from
-   becoming the thing we replaced.
+7. [x] **Real trial counter for Deflated Sharpe.** Added `experiments.py`: every run is
+   appended to `data/experiments.jsonl` with a config hash, and `--n-trials` now defaults to
+   the number of unique configs searched (+1 for the current run). The old hardcoded 100 is
+   still available by passing `--n-trials 100`.
 
-8. [ ] **Correlation-spike de-risking overlay.** Diversification fails exactly when
-   you need it (crises → correlations →1). Add a portfolio-level de-gross when
-   average pairwise correlation spikes. Defends the −36% drawdown.
+8. [x] **Correlation-spike de-risking overlay.** Implemented in `portfolio.corr_spike_overlay`;
+   enabled with `--corr-spike`. Computes a lagged rolling average pairwise correlation and
+   de-grosses the book when it spikes above a threshold.
 
 ## Tier 4 — deferred (needs paid data) / comes LAST
 

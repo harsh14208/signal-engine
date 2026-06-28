@@ -21,7 +21,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from .config import ANNUAL_VOL_SQRT
+from .config import ANNUAL_VOL_SQRT, Config
 from .data import random_walk_panel  # re-exported: validation.random_walk_panel
 
 
@@ -106,4 +106,71 @@ def placebo_sharpes(
         "p95": float(np.percentile(arr, 95)),
         "max": float(arr.max()),
         "noise_floor_95": float(np.percentile(arr, 95)),
+    }
+
+
+def purged_walk_forward(
+    prices: pd.DataFrame,
+    config: Config,
+    n_splits: int = 5,
+    embargo_frac: float = 0.02,
+) -> dict:
+    """Expanding-window walk-forward with a small embargo gap between train/test.
+
+    For each fold the weights, IDM, and FDM are estimated on the training window
+    and then applied out-of-sample on the following test window. The embargo
+    prevents target/return overlap leakage.
+    """
+    from .backtest import run_backtest, run_backtest_with_params
+    from .metrics import sharpe
+
+    prices = prices.sort_index().dropna(how="all")
+    n = len(prices)
+    if n_splits < 2 or n < 300:
+        return {"insufficient": True, "n": n}
+
+    boundaries = np.linspace(0, n, n_splits + 1, dtype=int)
+    embargo = max(1, int(round(n * embargo_frac)))
+    folds = []
+    min_train = 128  # enough history for the slowest rules and correlations
+
+    for i in range(1, n_splits):
+        train_end = boundaries[i] - embargo
+        test_start = boundaries[i]
+        test_end = boundaries[i + 1]
+        if train_end < min_train or test_end - test_start < 30:
+            continue
+
+        train = prices.iloc[:train_end]
+        test = prices.iloc[test_start:test_end]
+
+        train_result = run_backtest(train, config)
+        test_result = run_backtest_with_params(
+            test,
+            config,
+            train_result.weights,
+            train_result.idm,
+            train_result.fdm,
+        )
+
+        folds.append(
+            {
+                "train_end": str(train.index[-1]),
+                "test_start": str(test.index[0]),
+                "test_end": str(test.index[-1]),
+                "is_sharpe": sharpe(train_result.daily_returns),
+                "oos_sharpe": sharpe(test_result.daily_returns),
+            }
+        )
+
+    if not folds:
+        return {"insufficient": True, "n": n}
+
+    gaps = [f["is_sharpe"] - f["oos_sharpe"] for f in folds]
+    return {
+        "n_folds": len(folds),
+        "folds": folds,
+        "mean_is_sharpe": float(np.mean([f["is_sharpe"] for f in folds])),
+        "mean_oos_sharpe": float(np.mean([f["oos_sharpe"] for f in folds])),
+        "mean_gap": float(np.mean(gaps)),
     }
