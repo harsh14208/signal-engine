@@ -39,7 +39,9 @@ def test_build_forecast_panel_monkeypatched(monkeypatch):
     prices = pd.DataFrame({"SPY": 100.0, "EEM": 100.0}, index=idx)  # EEM not COT-mapped
     sig = pd.DataFrame({"SPY": _signal(1500, seed=3).to_numpy()}, index=idx)
     monkeypatch.setattr(
-        cot_data, "build_cot_signal_panel", lambda prices, expanded=False: sig.reindex(prices.index)
+        cot_data,
+        "build_cot_signal_panel",
+        lambda prices, expanded=False, tag=None: sig.reindex(prices.index),
     )
     panel = cot_data.build_cot_forecast_panel(prices)
     assert "SPY" in panel.columns and "EEM" not in panel.columns

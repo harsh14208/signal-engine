@@ -98,10 +98,10 @@ def _fetch_market(include: list[str], exclude: list[str]) -> pd.Series | None:
 
 
 def build_cot_signal_panel(
-    prices: pd.DataFrame, expanded: bool = False, use_cache: bool = True
+    prices: pd.DataFrame, expanded: bool = False, use_cache: bool = True, tag: str | None = None
 ) -> pd.DataFrame:
     """Daily (weekly-ffilled) net-positioning signal per mappable instrument."""
-    tag = "expanded" if expanded else "core"
+    tag = tag or ("expanded" if expanded else "core")
     cache = os.path.join(_CACHE_DIR, f"cot_signal_{tag}.parquet")
     syms = [s for s in prices.columns if s in COT_MAP]
     if not syms:
@@ -146,9 +146,11 @@ def cot_forecast(
     return (-scalar * z).clip(-cap, cap)  # PRE-SPECIFIED contrarian sign
 
 
-def build_cot_forecast_panel(prices: pd.DataFrame, expanded: bool = False) -> pd.DataFrame:
+def build_cot_forecast_panel(
+    prices: pd.DataFrame, expanded: bool = False, tag: str | None = None
+) -> pd.DataFrame:
     """Full-history COT forecast per instrument, aligned to `prices.index`."""
-    sig = build_cot_signal_panel(prices, expanded=expanded)
+    sig = build_cot_signal_panel(prices, expanded=expanded, tag=tag)
     if sig.empty:
         return pd.DataFrame(index=prices.index)
     fc = {c: cot_forecast(sig[c]) for c in sig.columns}

@@ -190,8 +190,11 @@ walk-forward (not a single split) before promoting** (see the ship-candidate les
     (mean OOS 0.54→0.54, full 0.70→0.69):** the COT-mapped instruments fall from ~53% of the
     core book to ~33% of the expanded book, so the positioning signal dilutes, and the
     expanded base is itself weaker. COT's value is **concentrated on the core macro universe**,
-    not broadened. Next, if pushed: a surgical "core + diversifying-commodity (UNG/CORN/WEAT)
-    COT" universe; A/B the momentum sign honestly; forward-confirm via `--monitor`.
+    not broadened. **Surgical "core + UNG/CORN/WEAT" (`--core-commodities`) tested too → also
+    fails:** the commodities HURT the base (core 0.61 → 0.59 WF OOS — natgas decay + young
+    CORN/WEAT histories, the same IS-flattering trap), and COT on the bigger set is inert
+    (0.59→0.59). Best config stays **core 19 + COT (0.63 WF OOS)**; `--core-commodities` kept
+    as a RESEARCH-inert flag. Remaining COT lever: A/B the momentum sign; forward-confirm via `--monitor`.
 
 ## Tier 1 — highest expected value (do next)
 

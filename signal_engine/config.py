@@ -150,6 +150,8 @@ class Config:
     corr_spike_max_degross: float = 0.50
     # COT (CFTC Commitments of Traders) positioning forecast — free, weekly, 1986+.
     use_cot: bool = False
+    # Surgical "core + diversifying-commodity COT" universe (adds UNG/CORN/WEAT to core).
+    use_core_commodities: bool = False
     # Out-of-sample parameter calibration.  Parameters (instrument weights, IDM,
     # FDM) are re-estimated on an expanding window ending at each rebal point,
     # then applied forward only.  This removes the full-sample calibration leak in
