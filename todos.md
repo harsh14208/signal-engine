@@ -122,10 +122,16 @@ The sibling `TradingRecommendationSystem` repo already has years of free/cached 
 can borrow without any paid feed. Each is a research lever — **validate on the
 walk-forward (not a single split) before promoting** (see the ship-candidate lesson above).
 
-0j. [x] **Vol-carry / VRP sleeve from the parent's options-IV data.** Investigated; the
-    local `options_iv_history.parquet` only spans ~5 days and the ORATS/Massive panels stop
-    at 2024-06. No free path to a 2007-start backtest without purchasing ORATS bulk history.
-    **Rejected / parked** until a long-history IV panel is available.
+0j. [~] **Vol-carry / VRP sleeve.** First parked for the WRONG reason (the parent's options
+    panel is ~5 days). CORRECTED: VRP needs no options panel — CBOE vol indices ARE
+    long-history implied vol (^VIX 1990+, ^RVX/^OVX/^GVZ/^EVZ 2007–08+). Built `vrp_data.py`:
+    free synthetic short-vol price per (vol-index → ETF) pair, no-lookahead, tested.
+    **The real finding:** injecting a short-vol stream as a *tradable instrument* DETONATES
+    the engine's vol-targeting — across 3 constructions (raw / tanh-bounded / ragged-start)
+    the book over-levers in calm patches and the equity blows up (MaxDD → −inf, spurious
+    Sharpe 4–7; the honesty tooling caught it instantly). VRP is fat-tailed; harvesting it
+    needs a DEDICATED, position-capped short-vol sizing path, not instrument injection.
+    **Parked** — data module kept + tested, intentionally NOT wired into the CLI.
 
 0k. [x] **Principled regime signal from the parent's HMM + FRED stress indices.** Ported the
     parent's 2-state Gaussian HMM to `macro.py::hmm_regime_overlay()` (features: VIX, SPY
@@ -154,6 +160,16 @@ walk-forward (not a single split) before promoting** (see the ship-candidate les
     optional dependency.
     **Validation:** a 50% GARCH blend hurts OOS (net SR 0.67 vs 0.69, OOS 0.49 vs 0.55,
     gap +0.26). Left **opt-in research flag only**.
+
+0o. [x] **No-broker monitoring harness (`monitor.py`, `--monitor`).** The cheap half of the
+    live-vs-backtest reconciliation the parent never had: rolling 1-year Sharpe with an
+    edge-decay alarm, plus `reconcile(live, backtest)` (correlation / tracking error / drift)
+    ready for the day live returns exist. The default's rolling-Sharpe path is healthy.
+
+0p. [x] **Flag taxonomy (optionality cleanup).** `--help` now ends with a taxonomy splitting
+    flags into CORE (validated) / RESEARCH (tested, none beat the walk-forward default) /
+    VALIDATION-DIAGNOSTICS, so the default path stays obvious despite ~70 flags. Deeper
+    pruning is deferred (project philosophy keeps tested dead-ends as opt-in research flags).
 
 ## Tier 1 — highest expected value (do next)
 

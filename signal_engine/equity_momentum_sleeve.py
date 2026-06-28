@@ -49,7 +49,9 @@ def _load_membership(start: str, end: str) -> pd.DataFrame:
         raise FileNotFoundError("No S&P 500 PIT membership file found in parent data")
 
     df["start_date"] = pd.to_datetime(df["start_date"])
-    df["end_date"] = pd.to_datetime(df["end_date"], errors="coerce").fillna(pd.Timestamp("2100-01-01"))
+    df["end_date"] = pd.to_datetime(df["end_date"], errors="coerce").fillna(
+        pd.Timestamp("2100-01-01")
+    )
 
     # Restrict to tickers that were ever members during the target window.
     ever = df[(df["start_date"] <= end_dt) & (df["end_date"] >= start_dt)]
@@ -68,10 +70,12 @@ def _latest_ohlcv_path(ticker: str) -> Path | None:
     files = list((_PARENT_DATA / "cache_ohlcv").glob(f"{ticker}_*_1d_adjTrue.csv"))
     if not files:
         return None
+
     # Filename: {TICKER}_{start}_{end}_1d_adjTrue.csv
     def _end(f: Path) -> str:
         parts = f.stem.split("_")
         return parts[2] if len(parts) >= 3 else ""
+
     return max(files, key=lambda f: _end(f))
 
 

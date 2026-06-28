@@ -181,7 +181,9 @@ class Config:
         credit_smooth = f" credit_smooth={self.credit_smooth}" if self.credit_smooth else ""
         garch = f"garch_w={self.garch_weight:.0%}" if self.use_garch_vol else "ewma"
         hmm = "on" if self.use_hmm_regime_overlay else "off"
-        bond_carry = "real" if self.use_real_bond_carry else ("proxies" if self.use_carry_proxies else "off")
+        bond_carry = (
+            "real" if self.use_real_bond_carry else ("proxies" if self.use_carry_proxies else "off")
+        )
         curve = "on" if self.use_curve_steepener else "off"
         eq_mom = "on" if self.use_equity_momentum_sleeve else "off"
         carry = "proxies" if self.use_carry_proxies else ("on" if self.use_carry else "off")

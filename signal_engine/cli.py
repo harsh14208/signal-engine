@@ -34,8 +34,23 @@ from .macro import (
 )
 from .markets import symbols
 from .metrics import sharpe
+from .monitor import edge_decay_report
 from .report import full_report
 from .validation import block_bootstrap_sharpe, lo_sharpe_ci, placebo_sharpes, purged_walk_forward
+
+
+_FLAG_TAXONOMY = """\
+flag taxonomy (validated 2026-06-27 — promote on the walk-forward, never one split):
+  CORE (shape the validated default): --vol-target --buffer --cost-scheme
+      --weight-scheme --no-governor --governor-smooth
+  RESEARCH — tested, NONE beat the walk-forward default; opt-in only:
+      --cluster-weights --expanded-universe --empirical-scalars --regime-overlay
+      --vix-term-overlay --credit-overlay --hmm-regime-overlay
+      --equity-momentum-sleeve --curve-steepener --real-bond-carry --garch-vol
+      --accel --xsmom --corr-spike --carry-proxies --ship-candidate
+  VALIDATION / DIAGNOSTICS: --validate --oos --walk-forward --diagnostics
+      --monitor --n-trials --placebo
+"""
 
 
 def build_config(args) -> Config:
@@ -209,6 +224,21 @@ def _print_diagnostics(prices, result, cfg) -> None:
         print(f"- Could not load VIX for regime split: {exc}")
 
 
+def _print_monitor(result) -> None:
+    rep = edge_decay_report(result.daily_returns)
+    print("\n## Edge-decay monitor (rolling 1y Sharpe)\n")
+    if rep.get("insufficient"):
+        print("- Insufficient data.")
+        return
+    print(
+        f"- current **{rep['current']:.2f}**  median {rep['median']:.2f}  "
+        f"min {rep['min']:.2f}  max {rep['max']:.2f}  "
+        f"% windows <0: {rep['pct_windows_below_zero']:.0%}"
+    )
+    flag = "⚠ ALARM (below floor)" if rep["alarm"] else "✅ healthy"
+    print(f"- latest vs floor {rep['alarm_floor']:.2f}: {flag}")
+
+
 def run(args) -> int:
     cfg = build_config(args)
     expanded = cfg.use_expanded_universe
@@ -301,9 +331,15 @@ def run(args) -> int:
         hmm_vix = load_vix(
             prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
         )
-        spy = _load_yf_series("SPY", prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d"))
-        tnx = _load_yf_series("^TNX", prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d"))
-        irx = _load_yf_series("^IRX", prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d"))
+        spy = _load_yf_series(
+            "SPY", prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
+        )
+        tnx = _load_yf_series(
+            "^TNX", prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
+        )
+        irx = _load_yf_series(
+            "^IRX", prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
+        )
         hmm_mult = hmm_regime_overlay(
             prices,
             hmm_vix,
@@ -336,6 +372,8 @@ def run(args) -> int:
         _print_walk_forward(prices, cfg, args.walk_forward)
     if args.diagnostics:
         _print_diagnostics(prices, result, cfg)
+    if args.monitor:
+        _print_monitor(result)
     if args.validate:
         _print_validation(result, cfg, args)
 
@@ -345,7 +383,12 @@ def run(args) -> int:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="signal_engine", description=__doc__)
+    p = argparse.ArgumentParser(
+        prog="signal_engine",
+        description=__doc__,
+        epilog=_FLAG_TAXONOMY,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument(
         "--source", default="synthetic", choices=["synthetic", "yfinance", "cache", "auto"]
     )
@@ -585,6 +628,7 @@ def main(argv=None) -> int:
         help="RESEARCH preset (expanded universe + regime overlay + 30%% buffer): higher "
         "full-sample Sharpe but NOT better on walk-forward OOS than the default — not promoted (see README)",
     )
+    p.add_argument("--monitor", action="store_true", help="rolling 1y Sharpe edge-decay monitor")
     p.add_argument("--placebo", type=int, default=12, help="random-walk placebo runs")
     p.add_argument(
         "--garch-vol",

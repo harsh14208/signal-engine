@@ -208,6 +208,20 @@ front, don't fake the result.
 
 ---
 
+## Monitoring & flag taxonomy
+
+- **`--monitor`** prints the strategy's rolling 1-year Sharpe with an edge-decay
+  alarm; `monitor.reconcile(live, backtest)` scores live-vs-backtest agreement
+  (correlation / tracking error / drift) for when live returns exist — the
+  reconciliation harness the parent project never had.
+- **`--help` ends with a flag taxonomy**: CORE (validated) / RESEARCH (tested,
+  none beat the walk-forward default — opt-in only) / VALIDATION-DIAGNOSTICS.
+  ~70 flags exist but only a handful shape the validated default.
+- **VRP note:** a free VRP data layer exists (`vrp_data.py`, CBOE vol indices —
+  no options panel needed) but is **parked**: injecting a fat-tailed short-vol
+  stream as a tradable instrument detonates the engine's vol-targeting. Harvesting
+  VRP needs a dedicated position-capped sizing path, not instrument injection.
+
 ## Roadmap (only after real-data OOS + placebo pass)
 
 1. Real futures term-structure feed → genuine carry across all asset classes.

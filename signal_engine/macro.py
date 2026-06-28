@@ -86,9 +86,7 @@ def load_vix_term_structure(start: str | None = None, end: str | None = None) ->
     close = raw["Close"] if "Close" in raw.columns else raw.loc[:, ("Close", syms)]
     df = close.copy()
     df.index = pd.to_datetime(df.index).tz_localize(None)
-    df = df.rename(
-        columns={"^VIX": "vix", "^VIX9D": "vix9d", "^VIX3M": "vix3m"}
-    )
+    df = df.rename(columns={"^VIX": "vix", "^VIX9D": "vix9d", "^VIX3M": "vix3m"})
     df = df.ffill().dropna(how="all")
     df.to_parquet(cache)
     return df.loc[start_dt:end_dt]
@@ -311,12 +309,14 @@ def hmm_regime_overlay(
         if len(window) < 60:
             continue
 
-        X = np.column_stack([
-            vix.loc[window].values,
-            spy_ret.loc[window].values,
-            curve.loc[window].values,
-            rvol.loc[window].values,
-        ])
+        X = np.column_stack(
+            [
+                vix.loc[window].values,
+                spy_ret.loc[window].values,
+                curve.loc[window].values,
+                rvol.loc[window].values,
+            ]
+        )
         valid = ~np.isnan(X).any(axis=1)
         Xv = X[valid]
         if len(Xv) < 60:
@@ -351,9 +351,7 @@ def hmm_regime_overlay(
                 tm,
                 model.transmat_,
             )
-            model.transmat_ = model.transmat_ / model.transmat_.sum(
-                axis=1, keepdims=True
-            )
+            model.transmat_ = model.transmat_ / model.transmat_.sum(axis=1, keepdims=True)
             if model.startprob_.sum() < eps:
                 model.startprob_ = np.full(2, 0.5)
             else:
