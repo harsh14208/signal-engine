@@ -13,15 +13,19 @@ from __future__ import annotations
 import argparse
 
 import numpy as np
+import pandas as pd
 
 from .backtest import run_backtest
 from .carry_data import build_carry_panel
+from .curve_data import load_curve_instruments
+from .equity_momentum_sleeve import build_equity_momentum_sleeve
 from .config import Config
 from .data import load_prices, synthetic_carry
 from .diagnostics import cost_buffer_frontier, per_instrument_attribution, vix_regime_split
 from .experiments import count_experiments, log_experiment
 from .macro import (
     credit_overlay,
+    hmm_regime_overlay,
     load_credit_spread,
     load_vix,
     load_vix_term_structure,
@@ -41,6 +45,14 @@ def build_config(args) -> Config:
         use_breakout=not args.no_breakout,
         use_carry=args.carry,
         use_carry_proxies=args.carry_proxies,
+        use_real_bond_carry=args.real_bond_carry,
+        use_curve_steepener=args.curve_steepener,
+        curve_steepener_scale=args.curve_steepener_scale,
+        curve_steepener_cost_bps=args.curve_steepener_cost_bps,
+        use_equity_momentum_sleeve=args.equity_momentum_sleeve,
+        eq_mom_lookback=args.eq_mom_lookback,
+        eq_mom_rebalance=args.eq_mom_rebalance,
+        eq_mom_decile=args.eq_mom_decile,
         use_expanded_universe=args.expanded_universe,
         use_empirical_scalars=args.empirical_scalars,
         use_regime_overlay=args.regime_overlay,
@@ -73,6 +85,22 @@ def build_config(args) -> Config:
         corr_spike_span=args.corr_spike_span,
         corr_spike_threshold=args.corr_spike_threshold,
         corr_spike_max_degross=args.corr_spike_max_degross,
+        use_garch_vol=args.use_garch_vol,
+        garch_weight=args.garch_weight,
+        garch_min_history=args.garch_min_history,
+        garch_refit_step=args.garch_refit_step,
+        garch_horizon=args.garch_horizon,
+        use_hmm_regime_overlay=args.use_hmm_regime_overlay,
+        hmm_train_window=args.hmm_train_window,
+        hmm_refit_stride=args.hmm_refit_stride,
+        hmm_bull_thresh=args.hmm_bull_thresh,
+        hmm_bear_thresh=args.hmm_bear_thresh,
+        hmm_trans_thresh=args.hmm_trans_thresh,
+        hmm_bull_gear=args.hmm_bull_gear,
+        hmm_bear_degear=args.hmm_bear_degear,
+        hmm_trans_degear=args.hmm_trans_degear,
+        hmm_smooth=args.hmm_smooth,
+        hmm_random_state=args.hmm_random_state,
     )
 
 
@@ -189,6 +217,18 @@ def run(args) -> int:
     prices = load_prices(
         syms, start=args.start, end=args.end, source=args.source, cache_tag=cache_tag
     )
+    if cfg.use_curve_steepener:
+        curve_prices = load_curve_instruments(prices, scale=cfg.curve_steepener_scale)
+        prices = pd.concat([prices, curve_prices], axis=1)
+    if cfg.use_equity_momentum_sleeve:
+        eq_mom = build_equity_momentum_sleeve(
+            prices.index.min().strftime("%Y-%m-%d"),
+            prices.index.max().strftime("%Y-%m-%d"),
+            lookback=cfg.eq_mom_lookback,
+            rebalance=cfg.eq_mom_rebalance,
+            decile=cfg.eq_mom_decile,
+        )
+        prices = pd.concat([prices, eq_mom.to_frame()], axis=1)
     if prices.shape[1] < 2:
         print("Not enough instruments with data.")
         return 1
@@ -255,6 +295,38 @@ def run(args) -> int:
         else:
             regime = regime * credit_mult
 
+    if cfg.use_hmm_regime_overlay:
+        from .macro import _load_yf_series
+
+        hmm_vix = load_vix(
+            prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
+        )
+        spy = _load_yf_series("SPY", prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d"))
+        tnx = _load_yf_series("^TNX", prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d"))
+        irx = _load_yf_series("^IRX", prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d"))
+        hmm_mult = hmm_regime_overlay(
+            prices,
+            hmm_vix,
+            spy,
+            tnx=tnx,
+            irx=irx,
+            train_window=cfg.hmm_train_window,
+            refit_stride=cfg.hmm_refit_stride,
+            bull_thresh=cfg.hmm_bull_thresh,
+            bear_thresh=cfg.hmm_bear_thresh,
+            trans_thresh=cfg.hmm_trans_thresh,
+            bull_gear=cfg.hmm_bull_gear,
+            bear_degear=cfg.hmm_bear_degear,
+            trans_degear=cfg.hmm_trans_degear,
+            random_state=cfg.hmm_random_state,
+        )
+        if cfg.hmm_smooth is not None and cfg.hmm_smooth > 1:
+            hmm_mult = hmm_mult.ewm(span=cfg.hmm_smooth, min_periods=1).mean()
+        if regime is None:
+            regime = hmm_mult
+        else:
+            regime = regime * hmm_mult
+
     result = run_backtest(prices, cfg, carry=carry, regime=regime)
     print(f"# signal-engine — {args.source} run\n")
     print(full_report(result))
@@ -289,7 +361,7 @@ def main(argv=None) -> int:
         dest="cost_scheme",
         help="flat 1.5 bps or per-instrument spreads",
     )
-    p.add_argument("--buffer", type=float, default=0.10)
+    p.add_argument("--buffer", type=float, default=0.30)
     p.add_argument("--no-breakout", action="store_true")
     p.add_argument(
         "--weight-scheme",
@@ -323,6 +395,47 @@ def main(argv=None) -> int:
         action="store_true",
         dest="carry_proxies",
         help="use free bond/equity carry proxies (FRED + yfinance dividends)",
+    )
+    p.add_argument(
+        "--real-bond-carry",
+        action="store_true",
+        dest="real_bond_carry",
+        help="use tenor-specific Treasury roll-down carry (DGS2/5/10/30) instead of T10Y3M slope",
+    )
+    p.add_argument(
+        "--curve-steepener",
+        action="store_true",
+        dest="curve_steepener",
+        help="add a synthetic UST 2s10s curve-steepener instrument",
+    )
+    p.add_argument(
+        "--curve-steepener-scale",
+        type=float,
+        default=1.0,
+        dest="curve_steepener_scale",
+        help="scalar on the 2s10s spread-change return",
+    )
+    p.add_argument(
+        "--curve-steepener-cost-bps",
+        type=float,
+        default=0.5,
+        dest="curve_steepener_cost_bps",
+        help="per-side cost for the synthetic curve steepener",
+    )
+    p.add_argument(
+        "--equity-momentum-sleeve",
+        action="store_true",
+        dest="equity_momentum_sleeve",
+        help="add a synthetic S&P 500 cross-sectional momentum sleeve",
+    )
+    p.add_argument("--eq-mom-lookback", type=int, default=252, dest="eq_mom_lookback")
+    p.add_argument("--eq-mom-rebalance", type=int, default=21, dest="eq_mom_rebalance")
+    p.add_argument(
+        "--eq-mom-decile",
+        type=float,
+        default=0.10,
+        dest="eq_mom_decile",
+        help="top/bottom decile cut for the momentum sleeve",
     )
     p.add_argument(
         "--expanded-universe",
@@ -394,6 +507,28 @@ def main(argv=None) -> int:
         dest="credit_smooth",
         help="EWMA span for the credit multiplier (None = raw)",
     )
+    p.add_argument(
+        "--hmm-regime-overlay",
+        action="store_true",
+        dest="use_hmm_regime_overlay",
+        help="use a 2-state HMM macro-regime overlay (VIX/SPY/yield-curve/realised-vol)",
+    )
+    p.add_argument("--hmm-train-window", type=int, default=252, dest="hmm_train_window")
+    p.add_argument("--hmm-refit-stride", type=int, default=63, dest="hmm_refit_stride")
+    p.add_argument("--hmm-bull-thresh", type=float, default=0.75, dest="hmm_bull_thresh")
+    p.add_argument("--hmm-bear-thresh", type=float, default=0.70, dest="hmm_bear_thresh")
+    p.add_argument("--hmm-trans-thresh", type=float, default=0.15, dest="hmm_trans_thresh")
+    p.add_argument("--hmm-bull-gear", type=float, default=1.10, dest="hmm_bull_gear")
+    p.add_argument("--hmm-bear-degear", type=float, default=0.70, dest="hmm_bear_degear")
+    p.add_argument("--hmm-trans-degear", type=float, default=0.85, dest="hmm_trans_degear")
+    p.add_argument(
+        "--hmm-smooth",
+        type=int,
+        default=None,
+        dest="hmm_smooth",
+        help="EWMA span for the HMM regime multiplier (None = raw)",
+    )
+    p.add_argument("--hmm-random-state", type=int, default=42, dest="hmm_random_state")
     p.add_argument("--accel", action="store_true", help="add acceleration rule")
     p.add_argument("--xsmom", action="store_true", help="add cross-sectional momentum rule")
     p.add_argument("--validate", action="store_true", help="run the statistical honesty suite")
@@ -451,6 +586,22 @@ def main(argv=None) -> int:
         "full-sample Sharpe but NOT better on walk-forward OOS than the default — not promoted (see README)",
     )
     p.add_argument("--placebo", type=int, default=12, help="random-walk placebo runs")
+    p.add_argument(
+        "--garch-vol",
+        action="store_true",
+        dest="use_garch_vol",
+        help="blend in a GARCH(1,1) forward-vol estimate (requires `pip install -e .[garch]`)",
+    )
+    p.add_argument(
+        "--garch-weight",
+        type=float,
+        default=0.0,
+        dest="garch_weight",
+        help="weight on GARCH vol (0 = pure EWMA blend, 1 = pure GARCH)",
+    )
+    p.add_argument("--garch-min-history", type=int, default=252, dest="garch_min_history")
+    p.add_argument("--garch-refit-step", type=int, default=63, dest="garch_refit_step")
+    p.add_argument("--garch-horizon", type=int, default=1, dest="garch_horizon")
     args = p.parse_args(argv)
     if args.ship_candidate:
         args.expanded_universe = True

@@ -43,6 +43,12 @@ VOL_EW_SPAN = 32  # recent exponentially-weighted daily-return vol
 VOL_LONG_WEIGHT = 0.30  # blend: 30% long-run avg + 70% recent (Carver)
 VOL_MIN_PERIODS = 20
 
+# Optional GARCH(1,1) forward-vol estimate (requires `pip install -e .[garch]`)
+VOL_GARCH_MIN_HISTORY = 252
+VOL_GARCH_REFIT_STEP = 63
+VOL_GARCH_HORIZON = 1
+VOL_GARCH_DIST = "t"
+
 # ── Risk / sizing ────────────────────────────────────────────────────────────
 DEFAULT_CAPITAL = 1_000_000.0
 DEFAULT_VOL_TARGET = 0.20  # annualised portfolio vol target (20%)
@@ -72,11 +78,28 @@ class Config:
     use_breakout: bool = True
     use_carry: bool = False  # legacy synthetic/demo carry flag
     use_carry_proxies: bool = False  # free bond/equity carry proxies
+    use_real_bond_carry: bool = False  # tenor-specific roll-down carry from DGS curve
+    use_curve_steepener: bool = False  # add UST 2s10s synthetic instrument
+    curve_steepener_scale: float = 1.0
+    use_equity_momentum_sleeve: bool = False  # add SP500 cross-sectional momentum sleeve
+    eq_mom_lookback: int = 252
+    eq_mom_rebalance: int = 21
+    eq_mom_decile: float = 0.10
     use_expanded_universe: bool = False
     use_empirical_scalars: bool = False
     use_regime_overlay: bool = False
     regime_threshold: float = 20.0
     regime_max_degear: float = 0.5
+    use_hmm_regime_overlay: bool = False
+    hmm_train_window: int = 252
+    hmm_refit_stride: int = 63
+    hmm_bull_thresh: float = 0.75
+    hmm_bear_thresh: float = 0.70
+    hmm_trans_thresh: float = 0.15
+    hmm_bull_gear: float = 1.10
+    hmm_bear_degear: float = 0.70
+    hmm_trans_degear: float = 0.85
+    hmm_smooth: int | None = None
     use_vix_term_overlay: bool = False
     vix_term_short_thresh: float = 1.10
     vix_term_long_thresh: float = 0.95
@@ -104,6 +127,14 @@ class Config:
     governor_max: float = GOVERNOR_MAX
     governor_smooth: int | None = None  # EWMA span on the leverage multiplier; None = raw
     regime_smooth: int | None = None  # EWMA span on the regime de-gross multiplier; None = raw
+    # Optional GARCH(1,1) forward-vol estimate for the vol denominator.
+    use_garch_vol: bool = False
+    garch_weight: float = 0.0  # 0 = pure EWMA blend, 1 = pure GARCH
+    garch_min_history: int = VOL_GARCH_MIN_HISTORY
+    garch_refit_step: int = VOL_GARCH_REFIT_STEP
+    garch_horizon: int = VOL_GARCH_HORIZON
+    hmm_random_state: int = 42
+    curve_steepener_cost_bps: float = 0.5
     vix_term_smooth: int | None = None  # EWMA span on the VIX term-structure multiplier; None = raw
     credit_smooth: int | None = None  # EWMA span on the credit multiplier; None = raw
     rule_weights: dict[str, float] = field(default_factory=dict)  # empty → equal
@@ -148,6 +179,11 @@ class Config:
         vix_term_smooth = f" vts_smooth={self.vix_term_smooth}" if self.vix_term_smooth else ""
         credit = "on" if self.use_credit_overlay else "off"
         credit_smooth = f" credit_smooth={self.credit_smooth}" if self.credit_smooth else ""
+        garch = f"garch_w={self.garch_weight:.0%}" if self.use_garch_vol else "ewma"
+        hmm = "on" if self.use_hmm_regime_overlay else "off"
+        bond_carry = "real" if self.use_real_bond_carry else ("proxies" if self.use_carry_proxies else "off")
+        curve = "on" if self.use_curve_steepener else "off"
+        eq_mom = "on" if self.use_equity_momentum_sleeve else "off"
         carry = "proxies" if self.use_carry_proxies else ("on" if self.use_carry else "off")
         return (
             f"capital=${self.capital:,.0f} vol_target={self.vol_target:.0%} "
@@ -158,7 +194,10 @@ class Config:
             f"regime={'on' if self.use_regime_overlay else 'off'}{regime_smooth} "
             f"vix_term={vix_term}{vix_term_smooth} "
             f"credit={credit}{credit_smooth} "
+            f"hmm={hmm} "
+            f"bond_carry={bond_carry} curve={curve} eq_mom={eq_mom} "
             f"carry={carry} scalars={'empirical' if self.use_empirical_scalars else 'fixed'} "
             f"corr_spike={'on' if self.use_corr_spike else 'off'} "
+            f"vol={garch} "
             f"rules=[{', '.join(rules)}]"
         )

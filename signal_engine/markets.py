@@ -93,8 +93,30 @@ EXPANDED_UNIVERSE: tuple[Instrument, ...] = UNIVERSE + (
     Instrument("REET", "Global REITs", "real_estate", cost_bps=2.5),
 )
 
-BY_SYMBOL: dict[str, Instrument] = {i.symbol: i for i in UNIVERSE}
-BY_SYMBOL_EXPANDED: dict[str, Instrument] = {i.symbol: i for i in EXPANDED_UNIVERSE}
+# Synthetic instruments that are injected from free data (e.g., FRED curve trades).
+# They are NOT in the price-fetch symbol lists, but they carry metadata so the
+# engine knows how to cost and classify them once merged into the price panel.
+SYNTHETIC_INSTRUMENTS: tuple[Instrument, ...] = (
+    Instrument(
+        "UST2S10S",
+        "US 2s10s curve steepener",
+        "bond",
+        carry_kind="curve_steepener",
+        cost_bps=0.5,
+    ),
+    Instrument(
+        "SP500_XSMOM",
+        "S&P 500 cross-sectional momentum sleeve",
+        "equity",
+        carry_kind=None,
+        cost_bps=5.0,
+    ),
+)
+
+BY_SYMBOL: dict[str, Instrument] = {i.symbol: i for i in UNIVERSE + SYNTHETIC_INSTRUMENTS}
+BY_SYMBOL_EXPANDED: dict[str, Instrument] = {
+    i.symbol: i for i in EXPANDED_UNIVERSE + SYNTHETIC_INSTRUMENTS
+}
 
 
 def symbols(expanded: bool = False) -> list[str]:

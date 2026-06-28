@@ -86,7 +86,9 @@ def load_vix_term_structure(start: str | None = None, end: str | None = None) ->
     close = raw["Close"] if "Close" in raw.columns else raw.loc[:, ("Close", syms)]
     df = close.copy()
     df.index = pd.to_datetime(df.index).tz_localize(None)
-    df = df.rename(columns={"^VIX": "vix", "^VIX9D": "vix9d", "^VIX3M": "vix3m"})
+    df = df.rename(
+        columns={"^VIX": "vix", "^VIX9D": "vix9d", "^VIX3M": "vix3m"}
+    )
     df = df.ffill().dropna(how="all")
     df.to_parquet(cache)
     return df.loc[start_dt:end_dt]
@@ -114,6 +116,31 @@ def load_credit_spread(start: str | None = None, end: str | None = None) -> pd.S
     idx = pd.bdate_range(start=start_dt, end=end_dt)
     out = s.reindex(idx, method="ffill").ffill()
     return out.fillna(s.mean())
+
+
+def _load_yf_series(symbol: str, start: str, end: str) -> pd.Series:
+    """Load a single yfinance series and cache it as parquet."""
+    import yfinance as yf  # optional data dependency
+
+    cache = _cache_path(f"{symbol.lower().replace('^', '')}.parquet")
+    start_dt = pd.Timestamp(start)
+    end_dt = pd.Timestamp(end or datetime.now().strftime("%Y-%m-%d"))
+
+    if os.path.exists(cache):
+        cached = pd.read_parquet(cache)
+        cached.index = pd.to_datetime(cached.index).tz_localize(None)
+        if cached.index.min() <= start_dt and cached.index.max() >= end_dt:
+            return cached.loc[start_dt:end_dt].iloc[:, 0]
+
+    raw = yf.download(symbol, start=start_dt, end=end_dt, progress=False, auto_adjust=True)
+    if raw is None or raw.empty:
+        raise RuntimeError(f"Failed to download {symbol}")
+    close = raw["Close"] if "Close" in raw.columns else raw.loc[:, ("Close", symbol)]
+    s = close.squeeze().copy()
+    s.index = pd.to_datetime(s.index).tz_localize(None)
+    s.name = symbol
+    s.to_frame().to_parquet(cache)
+    return s.loc[start_dt:end_dt]
 
 
 def _equity_drawdown(prices: pd.DataFrame) -> pd.Series:
@@ -229,3 +256,130 @@ def credit_overlay(
 
     mult = stress_mult * calm_mult
     return mult.clip(max_degear, max_gear).fillna(1.0)
+
+
+try:
+    from hmmlearn.hmm import GaussianHMM  # type: ignore[import-not-found]
+
+    _HMM_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    _HMM_AVAILABLE = False
+
+
+def hmm_regime_overlay(
+    prices: pd.DataFrame,
+    vix: pd.Series,
+    spy: pd.Series,
+    tnx: pd.Series | None = None,
+    irx: pd.Series | None = None,
+    train_window: int = 252,
+    refit_stride: int = 21,
+    bull_thresh: float = 0.75,
+    bear_thresh: float = 0.70,
+    trans_thresh: float = 0.15,
+    bull_gear: float = 1.10,
+    bear_degear: float = 0.70,
+    trans_degear: float = 0.85,
+    random_state: int = 42,
+) -> pd.Series:
+    """Daily HMM-based gear/de-gear multiplier.
+
+    Trains a 2-state Gaussian HMM on an expanding window of
+    (VIX level, SPY 20-day return, yield-curve spread, SPY 30-day realised vol).
+    The state with the lower VIX mean is labelled "bull"; the other "bear".
+    The posterior at the end of each window is mapped to a multiplier and held
+    forward for `refit_stride` days, so there is no lookahead.
+    """
+    if not _HMM_AVAILABLE:
+        return pd.Series(1.0, index=prices.index)
+
+    idx = prices.index
+    vix = vix.reindex(idx).ffill()
+    spy = spy.reindex(idx).ffill()
+    spy_ret = spy.pct_change(train_window).fillna(0.0)
+    rvol = spy.pct_change().rolling(30, min_periods=15).std().fillna(0.0) * np.sqrt(252)
+    curve = pd.Series(0.0, index=idx)
+    if tnx is not None and irx is not None:
+        curve = (tnx.reindex(idx) - irx.reindex(idx)).ffill().fillna(0.0)
+
+    mult = pd.Series(1.0, index=idx)
+    dates = idx.tolist()
+
+    for i in range(0, len(dates), refit_stride):
+        start = max(0, i - train_window + 1)
+        window = dates[start : i + 1]
+        if len(window) < 60:
+            continue
+
+        X = np.column_stack([
+            vix.loc[window].values,
+            spy_ret.loc[window].values,
+            curve.loc[window].values,
+            rvol.loc[window].values,
+        ])
+        valid = ~np.isnan(X).any(axis=1)
+        Xv = X[valid]
+        if len(Xv) < 60:
+            continue
+
+        means = Xv.mean(axis=0)
+        stds = Xv.std(axis=0)
+        stds[stds < 1e-6] = 1.0
+        Xn = (Xv - means) / stds
+
+        model = GaussianHMM(
+            n_components=2,
+            covariance_type="diag",
+            n_iter=25,
+            tol=1e-4,
+            random_state=random_state,
+            init_params="mc",
+            params="stmc",
+            min_covar=1e-3,
+        )
+        model.startprob_ = np.full(2, 0.5)
+        tm = np.full((2, 2), 0.05)
+        np.fill_diagonal(tm, 0.95)
+        model.transmat_ = tm
+        try:
+            with np.errstate(all="ignore"):
+                model.fit(Xn)
+            # Regularize degenerate transition / start probabilities.
+            eps = 1e-6
+            model.transmat_ = np.where(
+                model.transmat_.sum(axis=1, keepdims=True) < eps,
+                tm,
+                model.transmat_,
+            )
+            model.transmat_ = model.transmat_ / model.transmat_.sum(
+                axis=1, keepdims=True
+            )
+            if model.startprob_.sum() < eps:
+                model.startprob_ = np.full(2, 0.5)
+            else:
+                model.startprob_ = model.startprob_ / model.startprob_.sum()
+
+            post = model.predict_proba(Xn)
+        except Exception:
+            continue
+        vix_means = [model.means_[s][0] for s in range(2)]
+        bull_state = int(np.argmin(vix_means))
+        bear_state = 1 - bull_state
+
+        bull_prob = post[-1, bull_state]
+        bear_prob = post[-1, bear_state]
+        trans_risk = 1.0 - np.trace(model.transmat_) / 2.0
+
+        if bull_prob >= bull_thresh:
+            m = bull_gear
+        elif bear_prob >= bear_thresh:
+            m = bear_degear
+        elif trans_risk > trans_thresh:
+            m = trans_degear
+        else:
+            m = 1.0
+
+        for fill_d in dates[i : min(len(dates), i + refit_stride)]:
+            mult.loc[fill_d] = m
+
+    return mult.ffill().fillna(1.0)

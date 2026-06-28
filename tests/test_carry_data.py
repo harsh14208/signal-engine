@@ -50,3 +50,16 @@ def test_expanded_universe_equity_carry():
         panel = build_carry_panel(prices, Config(use_expanded_universe=True))
     assert np.allclose(panel["FXI"], 0.03)
     assert (panel["GLD"] == 0.0).all()
+
+
+def test_real_bond_carry_uses_roll_down():
+    idx = pd.bdate_range("2020-01-01", periods=100)
+    prices = pd.DataFrame({"TLT": 150.0, "GLD": 150.0}, index=idx)
+    fake_curve = pd.DataFrame(
+        {"DGS2": 0.015, "DGS5": 0.018, "DGS10": 0.020, "DGS30": 0.025},
+        index=idx,
+    )
+    with patch("signal_engine.carry_data.load_treasury_curve", return_value=fake_curve):
+        panel = build_carry_panel(prices, Config(use_real_bond_carry=True))
+    assert (panel["TLT"].dropna() != 0.0).any()
+    assert (panel["GLD"] == 0.0).all()

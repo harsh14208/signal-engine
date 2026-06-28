@@ -1,7 +1,8 @@
 """Free carry proxies for the dormant carry rule.
 
-Real carry needs futures term structure, but two clean legs are free right now:
-  • bond carry from the yield-curve slope (FRED T10Y3M)
+Real carry needs futures term structure, but several clean legs are free right now:
+  • bond carry from the yield-curve slope (FRED T10Y3M) — legacy proxy
+  • real bond roll-down from the full Treasury curve (DGS2/5/10/30)
   • equity carry from trailing 12-month dividend yield (yfinance)
 
 All fetchers cache results under `data/` so the engine stays deterministic offline
@@ -60,6 +61,72 @@ def load_us_short_rate(start: str | None = None, end: str | None = None) -> pd.S
     end = pd.Timestamp(end or datetime.now().strftime("%Y-%m-%d"))
     idx = pd.bdate_range(start=start, end=end)
     return s.reindex(idx, method="ffill").fillna(0.0)
+
+
+def load_treasury_curve(start: str | None = None, end: str | None = None) -> pd.DataFrame:
+    """Daily Treasury curve (DGS2/5/10/30) from FRED, as decimals.
+
+    Returns a DataFrame indexed by business date with columns
+    {'DGS2','DGS5','DGS10','DGS30'}.
+    """
+    start_dt = pd.Timestamp(start or "2007-01-01")
+    end_dt = pd.Timestamp(end or datetime.now().strftime("%Y-%m-%d"))
+    idx = pd.bdate_range(start=start_dt, end=end_dt)
+
+    cache = _cache_path("treasury_curve.parquet")
+    if os.path.exists(cache):
+        cached = pd.read_parquet(cache)
+        cached.index = pd.to_datetime(cached.index).tz_localize(None)
+        if cached.index.min() <= start_dt and cached.index.max() >= end_dt:
+            return cached.loc[start_dt:end_dt]
+
+    series = {}
+    for sid in ["DGS2", "DGS5", "DGS10", "DGS30"]:
+        s = _fred_series(sid).dropna() / 100.0
+        series[sid] = s
+
+    df = pd.DataFrame(series)
+    df = df.reindex(idx, method="ffill").ffill().bfill()
+    df.to_parquet(cache)
+    return df
+
+
+def _interpolate_yield(curve: pd.DataFrame, tenor: float) -> pd.Series:
+    """Linearly interpolate yield for a non-integer tenor from DGS2/5/10/30."""
+    tenors = np.array([2.0, 5.0, 10.0, 30.0])
+    cols = ["DGS2", "DGS5", "DGS10", "DGS30"]
+    if tenor <= tenors[0]:
+        return curve[cols[0]]
+    if tenor >= tenors[-1]:
+        return curve[cols[-1]]
+    # Find bracket
+    for i in range(len(tenors) - 1):
+        if tenors[i] <= tenor <= tenors[i + 1]:
+            w = (tenor - tenors[i]) / (tenors[i + 1] - tenors[i])
+            return (1 - w) * curve[cols[i]] + w * curve[cols[i + 1]]
+    return curve[cols[-1]]  # pragma: no cover
+
+
+# Tenor and (approximate) effective duration for each Treasury ETF proxy.
+_BOND_CARRY_PARAMS: dict[str, dict[str, float]] = {
+    "SHY": {"tenor": 2.0, "duration": 1.8},
+    "IEF": {"tenor": 7.5, "duration": 7.2},
+    "TIP": {"tenor": 7.5, "duration": 7.5},
+    "TLT": {"tenor": 20.0, "duration": 17.0},
+}
+
+
+def _roll_down_carry(curve: pd.DataFrame, sym: str) -> pd.Series:
+    """Approximate annual roll-down carry for a Treasury ETF proxy.
+
+    Carry ≈ duration × (yield(tenor) - yield(tenor - 1yr)).
+    """
+    params = _BOND_CARRY_PARAMS[sym]
+    tenor = params["tenor"]
+    duration = params["duration"]
+    y_t = _interpolate_yield(curve, tenor)
+    y_t_minus_1 = _interpolate_yield(curve, max(tenor - 1.0, 0.5))
+    return duration * (y_t - y_t_minus_1)
 
 
 def _load_dividends(symbols: list[str], start: str, end: str) -> pd.DataFrame:
@@ -122,8 +189,9 @@ def load_equity_carry(
 def build_carry_panel(prices: pd.DataFrame, config: Config | None = None) -> pd.DataFrame:
     """Assemble a carry DataFrame aligned with `prices`.
 
-    Bonds get the yield-curve slope; equities/real_estate/credit get trailing
-    dividend yield; FX and commodities get zero.
+    Bonds get tenor-specific roll-down carry when `use_real_bond_carry` is set,
+    otherwise the legacy yield-curve slope proxy; equities/real_estate/credit get
+    trailing dividend yield; FX and commodities get zero.
     """
     config = config or Config()
     symbols = list(prices.columns)
@@ -139,9 +207,15 @@ def build_carry_panel(prices: pd.DataFrame, config: Config | None = None) -> pd.
         if (instrument_for(s, expanded) or Instrument(s, "", "other")).carry_kind == "bond_slope"
     ]
     if bond_syms:
-        bond_carry = load_bond_carry(start, end)
-        bond_vals = bond_carry.reindex(out.index).ffill().fillna(0.0)
-        out[bond_syms] = pd.DataFrame({s: bond_vals for s in bond_syms}, index=out.index).values
+        if getattr(config, "use_real_bond_carry", False):
+            curve = load_treasury_curve(start, end)
+            for sym in bond_syms:
+                if sym in _BOND_CARRY_PARAMS:
+                    out[sym] = _roll_down_carry(curve, sym).reindex(out.index).ffill().fillna(0.0)
+        else:
+            bond_carry = load_bond_carry(start, end)
+            bond_vals = bond_carry.reindex(out.index).ffill().fillna(0.0)
+            out[bond_syms] = pd.DataFrame({s: bond_vals for s in bond_syms}, index=out.index).values
 
     equity_like_classes = {"equity", "real_estate", "credit"}
     equity_syms = [

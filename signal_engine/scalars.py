@@ -35,7 +35,14 @@ def empirical_scalars(prices: pd.DataFrame, config: Config | None = None) -> dic
     returns = daily_returns(prices)
     out: dict[str, pd.Series] = {}
     for sym in prices.columns:
-        dvol = blended_daily_vol(returns[sym])
+        dvol = blended_daily_vol(
+            returns[sym],
+            use_garch=config.use_garch_vol,
+            garch_weight=config.garch_weight,
+            garch_horizon=config.garch_horizon,
+            garch_min_history=config.garch_min_history,
+            garch_refit_step=config.garch_refit_step,
+        )
         forecasts = trend_forecasts(
             prices[sym],
             dvol,

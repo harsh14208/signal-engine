@@ -1,7 +1,13 @@
 import numpy as np
 import pandas as pd
+import pytest
 
-from signal_engine.macro import credit_overlay, regime_overlay, vix_term_overlay
+from signal_engine.macro import (
+    credit_overlay,
+    hmm_regime_overlay,
+    regime_overlay,
+    vix_term_overlay,
+)
 
 
 def test_regime_overlay_low_vix_is_one():
@@ -24,9 +30,7 @@ def test_regime_overlay_high_vix_reduces_multiplier():
 
 def test_regime_overlay_drawdown_reduces_multiplier():
     idx = pd.bdate_range("2015-01-01", periods=200)
-    prices = pd.DataFrame(
-        {"SPY": np.concatenate([np.linspace(100, 130, 100), np.linspace(130, 100, 100)])}, index=idx
-    )
+    prices = pd.DataFrame({"SPY": np.concatenate([np.linspace(100, 130, 100), np.linspace(130, 100, 100)])}, index=idx)
     vix = pd.Series(15.0, index=idx)
     mult = regime_overlay(prices, vix, drawdown_threshold=-0.05, max_degear=0.5)
     assert mult.min() < 1.0
@@ -96,4 +100,26 @@ def test_credit_overlay_no_lookahead():
     tweaked = spread.copy()
     tweaked.iloc[-1] = 10.0
     mod = credit_overlay(tweaked)
+    assert np.allclose(base.iloc[:-1].to_numpy(), mod.iloc[:-1].to_numpy())
+
+
+def test_hmm_regime_overlay_runs_and_no_lookahead():
+    pytest.importorskip("hmmlearn")
+    idx = pd.bdate_range("2015-01-01", periods=400)
+    np.random.seed(0)
+    prices = pd.DataFrame({"SPY": 100 * (1 + np.random.normal(0.0003, 0.01, len(idx))).cumprod()}, index=idx)
+    vix = pd.Series(15 + np.random.normal(0, 2, len(idx)).clip(0), index=idx)
+    spy = prices["SPY"]
+    tnx = pd.Series(0.02, index=idx)
+    irx = pd.Series(0.005, index=idx)
+
+    base = hmm_regime_overlay(prices, vix, spy, tnx=tnx, irx=irx, train_window=200, refit_stride=21)
+    assert len(base) == len(idx)
+    assert base.notna().any()
+    assert base.min() >= 0.5
+    assert base.max() <= 1.2
+
+    tweaked_vix = vix.copy()
+    tweaked_vix.iloc[-1] = 80.0
+    mod = hmm_regime_overlay(prices, tweaked_vix, spy, tnx=tnx, irx=irx, train_window=200, refit_stride=21)
     assert np.allclose(base.iloc[:-1].to_numpy(), mod.iloc[:-1].to_numpy())

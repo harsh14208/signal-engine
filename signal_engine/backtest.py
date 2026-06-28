@@ -129,7 +129,14 @@ def _build_forecasts(
     annual_vol: dict[str, pd.Series] = {}
 
     for sym in symbols:
-        dvol = blended_daily_vol(returns[sym])
+        dvol = blended_daily_vol(
+            returns[sym],
+            use_garch=config.use_garch_vol,
+            garch_weight=config.garch_weight,
+            garch_horizon=config.garch_horizon,
+            garch_min_history=config.garch_min_history,
+            garch_refit_step=config.garch_refit_step,
+        )
         annual_vol[sym] = annualise(dvol)
         rf = trend_forecasts(
             prices[sym],
