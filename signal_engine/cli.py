@@ -50,7 +50,8 @@ flag taxonomy (validated 2026-06-27 — promote on the walk-forward, never one s
       --cluster-weights --expanded-universe --empirical-scalars --regime-overlay
       --vix-term-overlay --credit-overlay --hmm-regime-overlay
       --equity-momentum-sleeve --curve-steepener --real-bond-carry --garch-vol
-      --accel --xsmom --corr-spike --carry-proxies --core-commodities --ship-candidate
+      --accel --xsmom --corr-spike --carry-proxies --core-commodities --cot-momentum
+      --ship-candidate
   VALIDATION / DIAGNOSTICS: --validate --oos --walk-forward --diagnostics
       --monitor --n-trials --placebo
 """
@@ -104,6 +105,7 @@ def build_config(args) -> Config:
         corr_spike_threshold=args.corr_spike_threshold,
         corr_spike_max_degross=args.corr_spike_max_degross,
         use_cot=args.cot,
+        cot_momentum=args.cot_momentum,
         use_core_commodities=args.core_commodities,
         use_garch_vol=args.use_garch_vol,
         garch_weight=args.garch_weight,
@@ -375,7 +377,11 @@ def run(args) -> int:
     cot_tag = {"universe": "core", "core_plus": "core_plus", "expanded": "expanded"}.get(
         cache_tag, "core"
     )
-    cot = build_cot_forecast_panel(prices, tag=cot_tag) if cfg.use_cot else None
+    cot = (
+        build_cot_forecast_panel(prices, tag=cot_tag, momentum=cfg.cot_momentum)
+        if cfg.use_cot
+        else None
+    )
     result = run_backtest(prices, cfg, carry=carry, regime=regime, cot=cot)
     print(f"# signal-engine — {args.source} run\n")
     print(full_report(result))
@@ -645,6 +651,12 @@ def main(argv=None) -> int:
         "--cot",
         action="store_true",
         help="COT positioning forecast (free CFTC data; contrarian/commercial-value sign)",
+    )
+    p.add_argument(
+        "--cot-momentum",
+        action="store_true",
+        dest="cot_momentum",
+        help="A/B research: flip the COT sign to momentum (follow specs) vs contrarian",
     )
     p.add_argument(
         "--core-commodities",

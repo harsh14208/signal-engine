@@ -194,7 +194,11 @@ walk-forward (not a single split) before promoting** (see the ship-candidate les
     fails:** the commodities HURT the base (core 0.61 → 0.59 WF OOS — natgas decay + young
     CORN/WEAT histories, the same IS-flattering trap), and COT on the bigger set is inert
     (0.59→0.59). Best config stays **core 19 + COT (0.63 WF OOS)**; `--core-commodities` kept
-    as a RESEARCH-inert flag. Remaining COT lever: A/B the momentum sign; forward-confirm via `--monitor`.
+    as a RESEARCH-inert flag. **Sign A/B done (`--cot-momentum`): on the walk-forward contrarian and
+    momentum are INDISTINGUISHABLE (both 0.63 mean OOS, +0.15 gap); contrarian is marginally better
+    only on the lower-power full-sample (0.72 vs 0.70, Calmar 0.38 vs 0.34) — consistent with the
+    pre-specified rationale, so the contrarian default stands (flipping on a backtest = sign-shop).**
+    Only remaining COT lever: forward-confirm the live edge via `--monitor` as data accrues.
 
 ## Tier 1 — highest expected value (do next)
 

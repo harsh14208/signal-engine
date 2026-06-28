@@ -136,22 +136,29 @@ def cot_forecast(
     scalar: float = COT_SCALAR,
     cap: float = FORECAST_CAP,
     lag: int = COT_REPORT_LAG,
+    momentum: bool = False,
 ) -> pd.Series:
-    """Contrarian positioning forecast (fade crowded specs). Causal + release-lagged."""
+    """Positioning forecast. Causal + release-lagged.
+
+    Default (PRE-SPECIFIED) is CONTRARIAN — fade crowded specs / side with commercials.
+    `momentum=True` is the alternative hypothesis (follow specs); it is a research A/B,
+    NOT a default to flip to on a better backtest (that would be sign-shopping).
+    """
     s = signal.shift(lag)  # conservative release lag (no lookahead)
     mp = max(window // 4, 60)
     mean = s.rolling(window, min_periods=mp).mean()
     std = s.rolling(window, min_periods=mp).std()
     z = (s - mean) / std
-    return (-scalar * z).clip(-cap, cap)  # PRE-SPECIFIED contrarian sign
+    direction = scalar if momentum else -scalar
+    return (direction * z).clip(-cap, cap)
 
 
 def build_cot_forecast_panel(
-    prices: pd.DataFrame, expanded: bool = False, tag: str | None = None
+    prices: pd.DataFrame, expanded: bool = False, tag: str | None = None, momentum: bool = False
 ) -> pd.DataFrame:
     """Full-history COT forecast per instrument, aligned to `prices.index`."""
     sig = build_cot_signal_panel(prices, expanded=expanded, tag=tag)
     if sig.empty:
         return pd.DataFrame(index=prices.index)
-    fc = {c: cot_forecast(sig[c]) for c in sig.columns}
+    fc = {c: cot_forecast(sig[c], momentum=momentum) for c in sig.columns}
     return pd.DataFrame(fc).reindex(prices.index)
