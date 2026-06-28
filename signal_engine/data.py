@@ -122,9 +122,7 @@ def load_prices(
         if not missing:
             return _clean(px.reindex(columns=symbols).dropna(how="all", axis=1))
         if source == "cache":
-            raise FileNotFoundError(
-                f"Cached prices at {path} missing requested symbols: {missing}"
-            )
+            raise FileNotFoundError(f"Cached prices at {path} missing requested symbols: {missing}")
 
     if source in ("yfinance", "auto"):
         px = _fetch_yfinance(symbols, start, end)

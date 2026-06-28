@@ -24,7 +24,9 @@ def test_regime_overlay_high_vix_reduces_multiplier():
 
 def test_regime_overlay_drawdown_reduces_multiplier():
     idx = pd.bdate_range("2015-01-01", periods=200)
-    prices = pd.DataFrame({"SPY": np.concatenate([np.linspace(100, 130, 100), np.linspace(130, 100, 100)])}, index=idx)
+    prices = pd.DataFrame(
+        {"SPY": np.concatenate([np.linspace(100, 130, 100), np.linspace(130, 100, 100)])}, index=idx
+    )
     vix = pd.Series(15.0, index=idx)
     mult = regime_overlay(prices, vix, drawdown_threshold=-0.05, max_degear=0.5)
     assert mult.min() < 1.0

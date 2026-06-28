@@ -145,7 +145,9 @@ def _print_walk_forward(prices, cfg, n_splits: int) -> None:
         print("- Insufficient data for walk-forward analysis.")
         return
     print(f"- Folds: {wf['n_folds']}  mean IS Sharpe: **{wf['mean_is_sharpe']:.2f}**")
-    print(f"- mean OOS Sharpe: **{wf['mean_oos_sharpe']:.2f}**  mean gap: **{wf['mean_gap']:+.2f}**")
+    print(
+        f"- mean OOS Sharpe: **{wf['mean_oos_sharpe']:.2f}**  mean gap: **{wf['mean_gap']:+.2f}**"
+    )
     for f in wf["folds"]:
         print(
             f"  - {f['test_start']} → {f['test_end']}: "
@@ -165,7 +167,9 @@ def _print_diagnostics(prices, result, cfg) -> None:
 
     print("\n### VIX regime split\n")
     try:
-        vix = load_vix(prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d"))
+        vix = load_vix(
+            prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
+        )
         split = vix_regime_split(result.daily_returns, vix)
         print(f"- Median VIX: {split['median_vix']:.1f}")
         for label, stats in [("High VIX", split["high_vix"]), ("Low VIX", split["low_vix"])]:
@@ -182,7 +186,9 @@ def run(args) -> int:
     expanded = cfg.use_expanded_universe
     syms = symbols(expanded=expanded)
     cache_tag = "expanded" if expanded else "universe"
-    prices = load_prices(syms, start=args.start, end=args.end, source=args.source, cache_tag=cache_tag)
+    prices = load_prices(
+        syms, start=args.start, end=args.end, source=args.source, cache_tag=cache_tag
+    )
     if prices.shape[1] < 2:
         print("Not enough instruments with data.")
         return 1
@@ -196,7 +202,9 @@ def run(args) -> int:
 
     regime = None
     if cfg.use_regime_overlay:
-        vix = load_vix(prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d"))
+        vix = load_vix(
+            prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
+        )
         regime = regime_overlay(
             prices,
             vix,
@@ -225,9 +233,13 @@ def run(args) -> int:
             regime = regime * vix_mult
 
     if cfg.use_credit_overlay:
-        spread = load_credit_spread(
-            prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
-        ).reindex(prices.index).ffill()
+        spread = (
+            load_credit_spread(
+                prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
+            )
+            .reindex(prices.index)
+            .ffill()
+        )
         credit_mult = credit_overlay(
             spread,
             upper_thresh=cfg.credit_upper_thresh,
@@ -345,7 +357,9 @@ def main(argv=None) -> int:
         dest="vix_term_overlay",
         help="use VIX term-structure (9D/spot and 3M/spot ratios) gear/de-gear overlay",
     )
-    p.add_argument("--vix-term-short-thresh", type=float, default=1.10, dest="vix_term_short_thresh")
+    p.add_argument(
+        "--vix-term-short-thresh", type=float, default=1.10, dest="vix_term_short_thresh"
+    )
     p.add_argument("--vix-term-long-thresh", type=float, default=0.95, dest="vix_term_long_thresh")
     p.add_argument("--vix-term-max-gear", type=float, default=1.25, dest="vix_term_max_gear")
     p.add_argument("--vix-term-max-degear", type=float, default=0.50, dest="vix_term_max_degear")
@@ -416,9 +430,7 @@ def main(argv=None) -> int:
         dest="corr_spike",
         help="enable correlation-spike de-risking overlay",
     )
-    p.add_argument(
-        "--corr-spike-span", type=int, default=60, dest="corr_spike_span"
-    )
+    p.add_argument("--corr-spike-span", type=int, default=60, dest="corr_spike_span")
     p.add_argument(
         "--corr-spike-threshold",
         type=float,
@@ -435,7 +447,8 @@ def main(argv=None) -> int:
         "--ship-candidate",
         action="store_true",
         dest="ship_candidate",
-        help="validated best candidate: expanded universe + regime overlay + 30% buffer + regime smooth=5",
+        help="RESEARCH preset (expanded universe + regime overlay + 30%% buffer): higher "
+        "full-sample Sharpe but NOT better on walk-forward OOS than the default — not promoted (see README)",
     )
     p.add_argument("--placebo", type=int, default=12, help="random-walk placebo runs")
     args = p.parse_args(argv)

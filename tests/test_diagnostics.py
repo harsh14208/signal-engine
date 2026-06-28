@@ -2,12 +2,18 @@ import numpy as np
 import pandas as pd
 
 from signal_engine.config import Config
-from signal_engine.diagnostics import cost_buffer_frontier, per_instrument_attribution, vix_regime_split
+from signal_engine.diagnostics import (
+    cost_buffer_frontier,
+    per_instrument_attribution,
+    vix_regime_split,
+)
 
 
 def test_cost_buffer_frontier_shape(small_prices):
     cfg = Config()
-    frontier = cost_buffer_frontier(small_prices, cfg, cost_values=(1.0, 2.0), buffer_values=(0.0, 0.1))
+    frontier = cost_buffer_frontier(
+        small_prices, cfg, cost_values=(1.0, 2.0), buffer_values=(0.0, 0.1)
+    )
     assert frontier.shape == (4, 7)
     assert "net_sharpe" in frontier.columns
     assert "turnover" in frontier.columns

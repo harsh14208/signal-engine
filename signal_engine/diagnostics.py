@@ -44,9 +44,7 @@ def cost_buffer_frontier(
                     "is_sharpe": is_sr,
                     "oos_sharpe": oos_sr,
                     "turnover": float(result.turnover.mean() * 256),
-                    "max_dd": float(
-                        (result.equity / result.equity.cummax() - 1.0).min()
-                    ),
+                    "max_dd": float((result.equity / result.equity.cummax() - 1.0).min()),
                 }
             )
     return pd.DataFrame(rows)

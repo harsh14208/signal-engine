@@ -1,12 +1,15 @@
 # signal-engine — next best items
 
-**Status (2026-06-27):** real-data (2007–2026, 19 ETF proxies) net Sharpe **0.69**,
-MaxDD −38%, vol on target (21%), clears placebo + Lo CI. Validated wins:
-realised-vol **governor** and **30% position buffer**. Confirmed dead-ends:
-**asset-class cluster weighting**, **VIX term-structure overlay**, and **Baa-10Y
-credit-spread overlay**. Ship-candidate preset (`--ship-candidate`):
-expanded universe + regime overlay + 30% buffer + regime smooth=5 → Net SR 0.74,
-OOS SR 0.72, gap +0.03, turnover ~63×.
+**Status (2026-06-27):** real-data (2007–2026, 19 ETF proxies) net Sharpe **0.68**,
+MaxDD −36%, vol on target (21%); clears placebo + Lo CI, and now **clears Deflated
+Sharpe at the honest 16-trial count (0.68 > 0.54)**. The honest read is the **4-fold
+walk-forward** (mean OOS **0.59**, gap +0.14), NOT the single 70/30 split (OOS 0.51).
+Validated wins: realised-vol **governor** and **30% position buffer**. Confirmed
+dead-ends: **asset-class cluster weighting**, **VIX term-structure overlay**, **Baa-10Y
+credit-spread overlay**. ⚠ **`--ship-candidate` (expanded universe + regime overlay) is
+NOT promoted** — it looks great on the single split (OOS 0.72 / gap +0.03) but the
+walk-forward refutes it (mean OOS **0.54 < the default's 0.59**, gap +0.28); a
+single-split false dawn. The validated config is the **default (core 19 + governor)**.
 
 Rule for everything below: **each new lever must beat the random-walk placebo and
 survive an honest OOS split before it ships.** That discipline — not cleverness —
@@ -27,9 +30,11 @@ is the whole reason this engine beats the 0.15-Sharpe project it replaced.
       metadata wired into weights, reports, and carry assignment.
 - [x] **Default buffer raised to 30%** — a pure parameter change that raised baseline
       OOS Sharpe from 0.51 to 0.55 and cut turnover from ~60× to ~47×.
-- [x] **`--ship-candidate` preset** — opt-in flag for expanded universe + regime overlay
-      + 30% buffer + regime smoothing span 5. Delivers Net SR 0.74 / OOS SR 0.72 /
-      gap +0.03 / turnover ~63×, clearing all shipping gates.
+- [x] **`--ship-candidate` preset (implemented; NOT promoted)** — expanded universe +
+      regime overlay + 30% buffer + regime smooth 5. Looks like Net SR 0.74 / OOS 0.72 /
+      gap +0.03 on a single 70/30 split, but the **4-fold walk-forward refutes it**
+      (mean OOS 0.54 < the plain default's 0.59, gap +0.28). A single-split false dawn —
+      kept as a research flag only. Lesson: promote on the walk-forward, never one split.
 
 ## 🗑️ Confirmed dead-end (kept as a research flag, OFF by default)
 - **Asset-class cluster weighting** (`--cluster-weights`): hurt across the board
@@ -109,6 +114,45 @@ honest OOS split before shipping.
     **Result:** the +0.20 IS/OOS gap is clearly regime-driven — low-VIX periods have Sharpe
     ~1.28, high-VIX periods ~0.08. This is the same stress-regime story the overlay tries to
     address; the diagnostics confirm the source of the gap.
+
+## Tier 0b — leverage the *parent project's* existing data (free, no new feed)
+
+The sibling `TradingRecommendationSystem` repo already has years of free/cached data we
+can borrow without any paid feed. Each is a research lever — **validate on the
+walk-forward (not a single split) before promoting** (see the ship-candidate lesson above).
+
+0j. [ ] **Vol-carry / VRP sleeve from the parent's options-IV data.** The parent has
+    `data/cache_options/options_iv_history.parquet`, an ORATS opportunity model, and a
+    demonstrated VRP edge (implied − realised vol). On the index ETFs we already trade
+    (SPY/EFA/EEM/…), a short-vol-when-IV≫RV forecast is a genuine, low-correlation,
+    *carry-like* return stream — the closest free substitute for the paid-futures carry in
+    Tier 1 #1. **Highest-value item here:** real orthogonal alpha, data already on disk.
+    Model P&L realistically (option cost/assignment); deploy as a forecast sleeve, not a
+    separate options book.
+
+0k. [ ] **Principled regime signal from the parent's HMM + FRED stress indices.** Our
+    current regime overlay (a VIX threshold) is ~inert on the walk-forward. The parent
+    already computes a 2-state `hmmlearn` macro-regime HMM on SPY+VIX (`macro_regime.py`)
+    and pulls NFCI + STLFSI4 from FRED. Port the HMM bull-probability / NFCI as the
+    de-gross signal and re-test — a better regime input may make the overlay finally earn
+    its place (validate on walk-forward; the VIX-threshold version did not).
+
+0l. [ ] **Cross-sectional equity-momentum sleeve from the parent's PIT universe.** The
+    parent has survivorship-corrected S&P 500 point-in-time membership
+    (`data/sp500_ticker_start_end.csv`), a deep `cache_ohlcv/` history, and a built
+    cross-sectional harness (`cross_sectional_alpha_model.py`). A dollar-neutral
+    top/bottom-decile equity-momentum sleeve is orthogonal to the macro-asset trend book
+    and stacks via IDM — all on free data already cached next door. Size it as ONE cluster
+    (internal equity correlation is high).
+
+0m. [ ] **Real bond carry + a curve trade from the full FRED Treasury curve.** Upgrade the
+    bond-carry proxy (0a) from a slope sign to actual roll-down using DGS2/5/10/30 (free
+    FRED; the parent already pulls T10Y3M), and add a 2s10s curve steepener as a synthetic
+    instrument — a low-correlation macro bet with decades of free history.
+
+0n. [ ] **GARCH(1,1) forward-vol sizing.** The parent already wired `arch` for conditional-
+    vol forecasts. A forward-vol estimate could sharpen the governor / position sizing vs
+    the trailing EW vol. Cheap to A/B — but only keep it if it beats EW on the walk-forward.
 
 ## Tier 1 — highest expected value (do next)
 

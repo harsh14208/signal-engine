@@ -74,7 +74,9 @@ def _load_dividends(symbols: list[str], start: str, end: str) -> pd.DataFrame:
         if cached_syms.issuperset(symbols):
             cached = cached.sort_index()
             cached.index = pd.to_datetime(cached.index).tz_localize(None)
-            if cached.index.min() <= pd.Timestamp(start) and cached.index.max() >= pd.Timestamp(end):
+            if cached.index.min() <= pd.Timestamp(start) and cached.index.max() >= pd.Timestamp(
+                end
+            ):
                 return cached.reindex(columns=symbols)
 
     start_dt = pd.Timestamp(start) - pd.DateOffset(years=2)
@@ -145,7 +147,8 @@ def build_carry_panel(prices: pd.DataFrame, config: Config | None = None) -> pd.
     equity_syms = [
         s
         for s in symbols
-        if (instrument_for(s, expanded) or Instrument(s, "", "other")).asset_class in equity_like_classes
+        if (instrument_for(s, expanded) or Instrument(s, "", "other")).asset_class
+        in equity_like_classes
     ]
     if equity_syms:
         equity_carry = load_equity_carry(equity_syms, prices, start, end)

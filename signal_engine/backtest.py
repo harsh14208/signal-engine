@@ -21,10 +21,20 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
-from .forecast import combine_instrument, equal_weights as _equal_rule_weights, estimate_fdm, pooled_rule_correlation
+from .forecast import (
+    combine_instrument,
+    equal_weights as _equal_rule_weights,
+    estimate_fdm,
+    pooled_rule_correlation,
+)
 from .markets import cost_per_symbol, instrument_for
 from .portfolio import apply_buffer, corr_spike_overlay, estimate_idm, position_units, vol_governor
-from .rules import acceleration_forecast, carry_forecast, cross_sectional_momentum_forecast, trend_forecasts
+from .rules import (
+    acceleration_forecast,
+    carry_forecast,
+    cross_sectional_momentum_forecast,
+    trend_forecasts,
+)
 from .scalars import _dynamic_scalar
 from .volatility import annualise, blended_daily_vol, daily_returns
 from .weights import build_instrument_weights
@@ -127,17 +137,22 @@ def _build_forecasts(
             config.ewmac_speeds,
             config.breakout_spans if config.use_breakout else (),
         )
-        if (config.use_carry or config.use_carry_proxies) and carry is not None and sym in carry.columns:
+        if (
+            (config.use_carry or config.use_carry_proxies)
+            and carry is not None
+            and sym in carry.columns
+        ):
             rf["carry"] = carry_forecast(carry[sym], annual_vol[sym])
         if config.use_accel:
             fast, slow = config.accel_speeds[0], config.accel_speeds[1]
-            rf["accel"] = acceleration_forecast(
-                prices[sym], dvol, fast_pair=fast, slow_pair=slow
-            )
+            rf["accel"] = acceleration_forecast(prices[sym], dvol, fast_pair=fast, slow_pair=slow)
 
         # Optional expanding-window scalar recalibration.
         if config.use_empirical_scalars:
-            rf = {name: (fc * _dynamic_scalar(fc)).clip(-config.forecast_cap, config.forecast_cap) for name, fc in rf.items()}
+            rf = {
+                name: (fc * _dynamic_scalar(fc)).clip(-config.forecast_cap, config.forecast_cap)
+                for name, fc in rf.items()
+            }
 
         per_inst[sym] = rf
 
@@ -306,7 +321,11 @@ def _expanding_calibration(
 
     if n <= min_obs:
         # Not enough history to estimate → neutral parameters.
-        return pd.DataFrame(equal_w, index=dates), pd.Series(1.0, index=dates), pd.Series(1.0, index=dates)
+        return (
+            pd.DataFrame(equal_w, index=dates),
+            pd.Series(1.0, index=dates),
+            pd.Series(1.0, index=dates),
+        )
 
     all_rules = sorted({r for d in per_inst.values() for r in d})
     rule_weights = _rule_weights(all_rules, config)
@@ -319,8 +338,7 @@ def _expanding_calibration(
         t = dates[idx]
         past_returns = returns.iloc[:idx]
         past_per_inst = {
-            sym: {name: s.iloc[:idx] for name, s in rf.items()}
-            for sym, rf in per_inst.items()
+            sym: {name: s.iloc[:idx] for name, s in rf.items()} for sym, rf in per_inst.items()
         }
         w = build_instrument_weights(symbols, past_returns, config)
         weight_records[t] = w
@@ -356,9 +374,7 @@ def run_backtest(
 
     # OOS parameter calibration: weights, IDM, and FDM are re-estimated on an
     # expanding window and applied forward only.
-    weights_df, idm_series, fdm_series = _expanding_calibration(
-        prices, returns, per_inst, config
-    )
+    weights_df, idm_series, fdm_series = _expanding_calibration(prices, returns, per_inst, config)
 
     return _execute_backtest(
         prices, config, per_inst, annual_vol, weights_df, idm_series, fdm_series, carry, regime
@@ -382,6 +398,4 @@ def run_backtest_with_params(
     prices = prices.sort_index().dropna(how="all").copy()
     returns = daily_returns(prices)
     per_inst, annual_vol = _build_forecasts(prices, returns, config, carry)
-    return _execute_backtest(
-        prices, config, per_inst, annual_vol, weights, idm, fdm, carry, regime
-    )
+    return _execute_backtest(prices, config, per_inst, annual_vol, weights, idm, fdm, carry, regime)

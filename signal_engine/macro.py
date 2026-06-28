@@ -86,9 +86,7 @@ def load_vix_term_structure(start: str | None = None, end: str | None = None) ->
     close = raw["Close"] if "Close" in raw.columns else raw.loc[:, ("Close", syms)]
     df = close.copy()
     df.index = pd.to_datetime(df.index).tz_localize(None)
-    df = df.rename(
-        columns={"^VIX": "vix", "^VIX9D": "vix9d", "^VIX3M": "vix3m"}
-    )
+    df = df.rename(columns={"^VIX": "vix", "^VIX9D": "vix9d", "^VIX3M": "vix3m"})
     df = df.ffill().dropna(how="all")
     df.to_parquet(cache)
     return df.loc[start_dt:end_dt]

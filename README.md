@@ -122,28 +122,29 @@ is a fixture.
 
 ### Real-data results (`--source cache`, 2007–2026, 19 ETF proxies)
 
-Default config (trend-only, equal-weight, realised-vol governor ON) on ~4,900 days
-of actual prices:
+Default config (trend-only, equal-weight, realised-vol governor ON, 30% buffer) on
+~4,900 days of actual prices:
 
 | Metric | Value |
 |---|---|
-| **Net Sharpe** | **0.65** (gross 0.69) |
-| Realised vol | 21.2% (vs 20% target) |
-| Max drawdown | −36.2% |
-| Calmar / Sortino | 0.34 / 0.88 |
-| Diversification ratio | 2.2× (mean standalone 0.25 → portfolio 0.65) |
-| Lo 95% CI | [0.20, 1.10] — SR=0 outside ✅ |
-| Block-bootstrap P5 | 0.31 > 0 ✅ |
-| Random-walk placebo | clears (0.65 vs 0.42 floor) ✅ |
-| IS / OOS (70/30) | 0.71 / 0.51 — gap +0.20 ⚠ |
-| Deflated Sharpe (100 trials) | 0.65 < 0.69 ⚠ (clears at this project's real handful of trials) |
+| **Net Sharpe** | **0.68** (gross 0.72) |
+| Realised vol | 21.1% (vs 20% target) |
+| Max drawdown | −36.3% |
+| Calmar | 0.35 |
+| Diversification ratio | 2.4× (mean standalone → portfolio 0.68) |
+| Lo 95% CI | [0.23, 1.13] — SR=0 outside ✅ |
+| Block-bootstrap P5 | 0.34 > 0 ✅ |
+| Random-walk placebo | clears (0.68 vs 0.37 floor) ✅ |
+| **Deflated Sharpe (16 _real_ trials)** | **0.68 > 0.54 ✅ clears at the honest trial count** |
+| Single 70/30 split IS/OOS | 0.75 / 0.51 — gap +0.24 ⚠ |
+| **Walk-forward (4-fold) mean OOS** | **0.59 — gap +0.14** ← the honest test |
 
-**Honest caveats:** the IS/OOS gap is wide — the governor's vol-targeting paid off
-more in the cleaner-trending 2007–2019 era than the choppy 2020–2026 hold-out
-(OOS 0.51 is still positive and within bootstrap noise of the ungoverned 0.57). It
-has **no fitted parameters**, so this is regime, not overfitting. The 100-trial
-Deflated bar is a conservative placeholder; at this project's actual handful of
-configs the bar (~0.49) is cleared.
+**Read the walk-forward, not the single split.** A single 70/30 cut puts the entire
+hold-out in the choppy 2020–2026 window (OOS 0.51, gap +0.24 — pessimistic). The
+4-fold purged walk-forward — the honest multi-period test — gives **mean OOS 0.59,
+gap +0.14**. The Deflated Sharpe now uses the *actual logged* trial count (16, via
+`experiments.py`), not a placeholder, and the edge **clears it**; SR=0 is outside the
+Lo CI; it clears the random-walk placebo. This is a real ~0.6 out-of-sample edge.
 
 **The ablation that set the defaults** (the discipline in action):
 
@@ -159,21 +160,33 @@ REIT, the 2-name credit sleeve). Shipping a plausible-but-harmful knob is the ex
 mistake the parent project made 96 times — here it's a one-line research flag
 (`--cluster-weights`), off by default. The **governor** is the validated win.
 
-### Optional macro overlays (off by default)
+### `--ship-candidate` and overlays — a single-split false dawn (kept honest)
 
-Two free-data overlays were tested and **left opt-in** because neither improves
-the ship candidate on honest OOS grounds:
+The `--ship-candidate` preset (expanded 42-ETF universe + regime overlay + 30%
+buffer) looks like a big win **on a single 70/30 split**: net SR 0.74, OOS **0.72**,
+gap +0.03. It is **not** a validated improvement — the walk-forward refutes it:
 
-- `--vix-term-overlay` uses the VIX term structure (`^VIX9D` / `^VIX` and
-  `^VIX3M` / `^VIX`). On top of `--ship-candidate` it produced net SR 0.72
-  (vs 0.74), OOS 0.68 (vs 0.72), and slightly higher turnover.
-- `--credit-overlay` uses Moody's Baa−10Y spread (`BAA10Y`) from FRED as a
-  long-history credit risk premium. A small grid search found a tuned setup
-  statistically tied with the ship candidate, so it is treated as no improvement
-  and kept as a research flag.
+| Config | Full Sh | Calmar | Divers | single-split OOS | **walk-fwd mean OOS** | WF gap |
+|---|---|---|---|---|---|---|
+| **default** (core 19) | 0.68 | 0.35 | 2.4× | 0.51 | **0.59** | **+0.14** |
+| + expanded universe (42) | 0.69 | 0.35 | 2.9× | 0.52 | 0.53 ↓ | +0.29 |
+| + regime overlay only | 0.69 | 0.36 | 2.4× | 0.54 | 0.59 | +0.14 |
+| ship-candidate (both) | 0.74 | 0.40 | 2.9× | **0.72** | **0.54 ↓** | +0.28 |
 
-Both are wired through the same no-lookahead overlay path as the VIX/drawdown
-regime overlay and are available for further experimentation.
+On the honest multi-fold test the ship-candidate's OOS (0.54) is **worse** than the
+plain default (0.59) with double the gap — its 0.72 single-split OOS was just the
+2020–2026 window flattering the expanded+regime combo. Decomposition: the **expanded
+universe** lifts the diversification *ratio* and IS Sharpe, but the younger/thinner
+ETFs over-fit IS (walk-forward OOS drops) **and** raise the placebo floor 0.37→0.56,
+so signal-to-noise actually *worsens* (0.74/0.56 = 1.3× vs the default's 0.68/0.37 =
+1.8×). The **regime overlay** is ~inert on the walk-forward.
+
+So `--ship-candidate` is a **research flag, not promoted** — the validated default
+(core 19, governor) wins on the honest test. The `--vix-term-overlay`
+(`^VIX9D/^VIX`, `^VIX3M/^VIX` term structure) and `--credit-overlay` (FRED `BAA10Y`)
+were likewise tested and **left opt-in** (no walk-forward improvement). The whole
+project's discipline in one line: **promote on the walk-forward, never the single
+split.**
 
 ---
 
