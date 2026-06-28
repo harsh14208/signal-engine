@@ -148,6 +148,8 @@ class Config:
     corr_spike_span: int = 60
     corr_spike_threshold: float = 0.50
     corr_spike_max_degross: float = 0.50
+    # COT (CFTC Commitments of Traders) positioning forecast — free, weekly, 1986+.
+    use_cot: bool = False
     # Out-of-sample parameter calibration.  Parameters (instrument weights, IDM,
     # FDM) are re-estimated on an expanding window ending at each rebal point,
     # then applied forward only.  This removes the full-sample calibration leak in
@@ -170,6 +172,8 @@ class Config:
             rules += ["ACCEL"]
         if self.use_xsmom:
             rules += ["XSMOM"]
+        if self.use_cot:
+            rules += ["COT"]
         weight = self.weight_scheme
         if self.weight_scheme == "cluster" or self.cluster_weights:
             weight = "cluster"

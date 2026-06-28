@@ -210,6 +210,14 @@ front, don't fake the result.
 
 ## Monitoring & flag taxonomy
 
+- **`--cot` (VALIDATED-POSITIVE):** free CFTC Commitments-of-Traders positioning is
+  the **first free signal to clear the walk-forward** (full 0.69→0.72, walk-forward
+  OOS 0.61→0.63, pre-specified contrarian sign). It's a per-instrument *rule* on ~10
+  macro-core ETFs combined via FDM — orthogonal to price (it's *positioning*), unlike
+  every overlay that came before it. Kept opt-in (needs a network fetch + the margin is
+  modest and fold-concentrated); recommended for promotion pending wider coverage.
+
+
 - **`--monitor`** prints the strategy's rolling 1-year Sharpe with an edge-decay
   alarm; `monitor.reconcile(live, backtest)` scores live-vs-backtest agreement
   (correlation / tracking error / drift) for when live returns exist — the

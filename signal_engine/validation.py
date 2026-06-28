@@ -114,6 +114,7 @@ def purged_walk_forward(
     config: Config,
     n_splits: int = 5,
     embargo_frac: float = 0.02,
+    cot: pd.DataFrame | None = None,
 ) -> dict:
     """Expanding-window walk-forward with a small embargo gap between train/test.
 
@@ -143,14 +144,17 @@ def purged_walk_forward(
 
         train = prices.iloc[:train_end]
         test = prices.iloc[test_start:test_end]
+        cot_train = cot.iloc[:train_end] if cot is not None else None
+        cot_test = cot.iloc[test_start:test_end] if cot is not None else None
 
-        train_result = run_backtest(train, config)
+        train_result = run_backtest(train, config, cot=cot_train)
         test_result = run_backtest_with_params(
             test,
             config,
             train_result.weights,
             train_result.idm,
             train_result.fdm,
+            cot=cot_test,
         )
 
         folds.append(

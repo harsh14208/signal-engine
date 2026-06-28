@@ -122,6 +122,7 @@ def _build_forecasts(
     returns: pd.DataFrame,
     config: Config,
     carry: pd.DataFrame | None,
+    cot: pd.DataFrame | None = None,
 ) -> tuple[dict[str, dict[str, pd.Series]], dict[str, pd.Series]]:
     """Compute per-instrument rule forecasts and annualised vols."""
     symbols = list(prices.columns)
@@ -150,6 +151,9 @@ def _build_forecasts(
             and sym in carry.columns
         ):
             rf["carry"] = carry_forecast(carry[sym], annual_vol[sym])
+        if config.use_cot and cot is not None and sym in cot.columns:
+            # Pre-computed full-history forecast (causal); reindex to this slice.
+            rf["cot"] = cot[sym].reindex(prices.index)
         if config.use_accel:
             fast, slow = config.accel_speeds[0], config.accel_speeds[1]
             rf["accel"] = acceleration_forecast(prices[sym], dvol, fast_pair=fast, slow_pair=slow)
@@ -371,13 +375,14 @@ def run_backtest(
     config: Config | None = None,
     carry: pd.DataFrame | None = None,
     regime: pd.Series | None = None,
+    cot: pd.DataFrame | None = None,
 ) -> BacktestResult:
     """Run the full backtest pipeline with expanding-window calibration."""
     config = config or Config()
     prices = prices.sort_index().dropna(how="all").copy()
     returns = daily_returns(prices)
 
-    per_inst, annual_vol = _build_forecasts(prices, returns, config, carry)
+    per_inst, annual_vol = _build_forecasts(prices, returns, config, carry, cot)
 
     # OOS parameter calibration: weights, IDM, and FDM are re-estimated on an
     # expanding window and applied forward only.
@@ -396,6 +401,7 @@ def run_backtest_with_params(
     fdm: float,
     carry: pd.DataFrame | None = None,
     regime: pd.Series | None = None,
+    cot: pd.DataFrame | None = None,
 ) -> BacktestResult:
     """Run the backtest with pre-computed weights, IDM, and FDM.
 
@@ -404,5 +410,5 @@ def run_backtest_with_params(
     """
     prices = prices.sort_index().dropna(how="all").copy()
     returns = daily_returns(prices)
-    per_inst, annual_vol = _build_forecasts(prices, returns, config, carry)
+    per_inst, annual_vol = _build_forecasts(prices, returns, config, carry, cot)
     return _execute_backtest(prices, config, per_inst, annual_vol, weights, idm, fdm, carry, regime)

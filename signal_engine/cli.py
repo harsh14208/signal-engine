@@ -17,6 +17,7 @@ import pandas as pd
 
 from .backtest import run_backtest
 from .carry_data import build_carry_panel
+from .cot_data import build_cot_forecast_panel
 from .curve_data import load_curve_instruments
 from .equity_momentum_sleeve import build_equity_momentum_sleeve
 from .config import Config
@@ -43,6 +44,8 @@ _FLAG_TAXONOMY = """\
 flag taxonomy (validated 2026-06-27 — promote on the walk-forward, never one split):
   CORE (shape the validated default): --vol-target --buffer --cost-scheme
       --weight-scheme --no-governor --governor-smooth
+  VALIDATED-POSITIVE (opt-in; clears the walk-forward but needs a network fetch):
+      --cot   (CFTC positioning; full 0.69→0.72, walk-forward OOS 0.61→0.63)
   RESEARCH — tested, NONE beat the walk-forward default; opt-in only:
       --cluster-weights --expanded-universe --empirical-scalars --regime-overlay
       --vix-term-overlay --credit-overlay --hmm-regime-overlay
@@ -100,6 +103,7 @@ def build_config(args) -> Config:
         corr_spike_span=args.corr_spike_span,
         corr_spike_threshold=args.corr_spike_threshold,
         corr_spike_max_degross=args.corr_spike_max_degross,
+        use_cot=args.cot,
         use_garch_vol=args.use_garch_vol,
         garch_weight=args.garch_weight,
         garch_min_history=args.garch_min_history,
@@ -181,8 +185,8 @@ def _print_oos(result, frac: float) -> None:
     print(f"- Curation gap (IS − OOS): **{gap:+.2f}** ({flag})")
 
 
-def _print_walk_forward(prices, cfg, n_splits: int) -> None:
-    wf = purged_walk_forward(prices, cfg, n_splits=n_splits)
+def _print_walk_forward(prices, cfg, n_splits: int, cot=None) -> None:
+    wf = purged_walk_forward(prices, cfg, n_splits=n_splits, cot=cot)
     print("\n## Walk-forward / purged CV\n")
     if wf.get("insufficient"):
         print("- Insufficient data for walk-forward analysis.")
@@ -363,13 +367,18 @@ def run(args) -> int:
         else:
             regime = regime * hmm_mult
 
-    result = run_backtest(prices, cfg, carry=carry, regime=regime)
+    cot = (
+        build_cot_forecast_panel(prices, expanded=cfg.use_expanded_universe)
+        if cfg.use_cot
+        else None
+    )
+    result = run_backtest(prices, cfg, carry=carry, regime=regime, cot=cot)
     print(f"# signal-engine — {args.source} run\n")
     print(full_report(result))
     if args.oos:
         _print_oos(result, args.oos)
     if args.walk_forward:
-        _print_walk_forward(prices, cfg, args.walk_forward)
+        _print_walk_forward(prices, cfg, args.walk_forward, cot=cot)
     if args.diagnostics:
         _print_diagnostics(prices, result, cfg)
     if args.monitor:
@@ -627,6 +636,11 @@ def main(argv=None) -> int:
         dest="ship_candidate",
         help="RESEARCH preset (expanded universe + regime overlay + 30%% buffer): higher "
         "full-sample Sharpe but NOT better on walk-forward OOS than the default — not promoted (see README)",
+    )
+    p.add_argument(
+        "--cot",
+        action="store_true",
+        help="COT positioning forecast (free CFTC data; contrarian/commercial-value sign)",
     )
     p.add_argument("--monitor", action="store_true", help="rolling 1y Sharpe edge-decay monitor")
     p.add_argument("--placebo", type=int, default=12, help="random-walk placebo runs")

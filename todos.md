@@ -4,13 +4,17 @@
 MaxDD −38%, vol on target (21.4%); clears placebo + Lo CI, and now **clears Deflated
 Sharpe at the honest trial count**. The honest read is the **4-fold walk-forward**
 (mean OOS **0.61**, gap +0.12), NOT the single 70/30 split (OOS 0.55).
-Validated wins: realised-vol **governor** and **30% position buffer**. Confirmed
-dead-ends / opt-in only: **asset-class cluster weighting**, **VIX term-structure
-overlay**, **Baa-10Y credit-spread overlay**, **GARCH vol sizing**, **HMM regime
-overlay**, **S&P 500 x-sectional momentum sleeve**. ⚠ **`--ship-candidate` (expanded
-universe + regime overlay) is NOT promoted** — it looked great on a single split but
-the walk-forward refuted it; a single-split false dawn. The validated config remains
-**default (core 19 + governor + 30% buffer)**.
+Validated wins: realised-vol **governor** and **30% position buffer**. 🟢 **NEW —
+`--cot` (CFTC Commitments-of-Traders positioning) is the FIRST free signal to clear
+the walk-forward** (full 0.69→0.72, single-split OOS 0.55→0.60, walk-forward mean
+OOS 0.61→0.63, block-boot P5 0.34→0.38; pre-specified contrarian sign). Kept opt-in
+(network fetch + modest, fold-concentrated margin) — recommended for promotion
+pending wider coverage / forward confirmation. Confirmed dead-ends / opt-in only:
+**asset-class cluster weighting**, **VIX term-structure overlay**, **Baa-10Y
+credit-spread overlay**, **GARCH vol sizing**, **HMM regime overlay**, **S&P 500
+x-sectional momentum sleeve**, **VRP injection (detonates vol-targeting — parked)**.
+⚠ **`--ship-candidate` is NOT promoted** — single-split false dawn. The validated
+default remains **core 19 + governor + 30% buffer**.
 
 Rule for everything below: **each new lever must beat the random-walk placebo and
 survive an honest OOS split before it ships.** That discipline — not cleverness —
@@ -170,6 +174,19 @@ walk-forward (not a single split) before promoting** (see the ship-candidate les
     flags into CORE (validated) / RESEARCH (tested, none beat the walk-forward default) /
     VALIDATION-DIAGNOSTICS, so the default path stays obvious despite ~70 flags. Deeper
     pruning is deferred (project philosophy keeps tested dead-ends as opt-in research flags).
+
+0q. [x] 🟢 **COT positioning (`cot_data.py`, `--cot`) — the FIRST free lever to clear the
+    walk-forward.** Free CFTC Commitments-of-Traders (Socrata `6dca-aqww`, 1986+): weekly
+    net non-commercial / open interest, mapped to ~10 macro-core ETFs (S&P, Russell, gold,
+    silver, crude, bonds, notes, EUR, JPY, USD) by max-OI contract per date. Turned into a
+    PRE-SPECIFIED contrarian forecast (fade crowded specs = side with commercials) — a
+    per-instrument RULE combined via FDM (not a de-gross overlay). z-score on full history
+    so it survives the walk-forward; threaded through `purged_walk_forward` (the first
+    per-instrument feature that is). **Result:** full 0.69→0.72, single-split OOS 0.55→0.60,
+    **walk-forward mean OOS 0.61→0.63**, block-boot P5 0.34→0.38, clears Deflated @29 trials
+    + placebo. Modest + fold-concentrated (one 2018–22 fold does much of it) and needs a CFTC
+    fetch → kept **opt-in / VALIDATED-POSITIVE**, not auto-promoted to default. Next: map
+    more instruments; A/B the momentum sign honestly; forward-confirm via `--monitor`.
 
 ## Tier 1 — highest expected value (do next)
 
