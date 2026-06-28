@@ -50,10 +50,31 @@ def _load_env(path: Path) -> dict[str, str]:
 def _credentials(live: bool) -> tuple[str, str]:
     env = _load_env(repo_root / ".env")
     mode = "live" if live else "paper"
-    key = os.environ.get("ALPACA_API_KEY") or env.get(f"alpaca_{mode}_api_key") or env.get("alpaca_api_key")
-    secret = os.environ.get("ALPACA_API_SECRET") or env.get(f"alpaca_{mode}_api_secret") or env.get("alpaca_api_secret")
+    # Prefer signal-engine-DEDICATED creds (ALPACA_SE_*) so the forward-test paper
+    # account stays ISOLATED from the parent project's Alpaca account — sharing one
+    # account would net positions on overlapping tickers (SPY, GLD, …) and make
+    # reconciliation meaningless. Falls back to the generic vars if SE_* are unset.
+    key = (
+        os.environ.get("ALPACA_SE_API_KEY")
+        or env.get(f"alpaca_se_{mode}_api_key")
+        or env.get("alpaca_se_api_key")
+        or os.environ.get("ALPACA_API_KEY")
+        or env.get(f"alpaca_{mode}_api_key")
+        or env.get("alpaca_api_key")
+    )
+    secret = (
+        os.environ.get("ALPACA_SE_API_SECRET")
+        or env.get(f"alpaca_se_{mode}_api_secret")
+        or env.get("alpaca_se_api_secret")
+        or os.environ.get("ALPACA_API_SECRET")
+        or env.get(f"alpaca_{mode}_api_secret")
+        or env.get("alpaca_api_secret")
+    )
     if not key or not secret:
-        raise RuntimeError(f"Alpaca {mode} credentials not found in env/.env")
+        raise RuntimeError(
+            f"Alpaca {mode} credentials not found — set ALPACA_SE_API_KEY / ALPACA_SE_API_SECRET "
+            "(dedicated signal-engine paper account) in env or .env"
+        )
     return key, secret
 
 
@@ -65,7 +86,14 @@ def _headers(key: str, secret: str) -> dict[str, str]:
     }
 
 
-def _request(base: str, path: str, key: str, secret: str, method: str = "GET", body: dict[str, Any] | None = None) -> dict[str, Any]:
+def _request(
+    base: str,
+    path: str,
+    key: str,
+    secret: str,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     url = f"{base}{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers=_headers(key, secret), method=method)
@@ -170,7 +198,9 @@ def main(argv: list[str] | None = None) -> int:
         description="Execute the latest target on Alpaca (paper by default)."
     )
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--paper", action="store_true", default=True, help="use Alpaca paper (default)")
+    mode.add_argument(
+        "--paper", action="store_true", default=True, help="use Alpaca paper (default)"
+    )
     mode.add_argument("--live", action="store_true", help="use Alpaca live account")
     p.add_argument("--targets", type=Path, default=DEFAULT_TARGETS_PATH)
     p.add_argument(

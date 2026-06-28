@@ -120,7 +120,14 @@ def load_prices(
         px = pd.read_parquet(path)
         missing = [s for s in symbols if s not in px.columns]
         if not missing:
-            return _clean(px.reindex(columns=symbols).dropna(how="all", axis=1))
+            px = px.reindex(columns=symbols).dropna(how="all", axis=1).sort_index()
+            # Honor `end` against the cache (enables historical backfill/replay — as-of
+            # targets for past dates without re-fetching). `start` is intentionally NOT
+            # applied: callers want full history up to `end`, and truncating the start
+            # would starve the slow rules / trip the >300-bar filter in _clean.
+            if end:
+                px = px.loc[:end]
+            return _clean(px)
         if source == "cache":
             raise FileNotFoundError(f"Cached prices at {path} missing requested symbols: {missing}")
 
