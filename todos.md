@@ -50,6 +50,50 @@ is the whole reason this engine beats the 0.15-Sharpe project it replaced.
 
 ---
 
+## Tier A — forward-validate the edge (paper deploy + reconcile) — THE next step
+
+The engine is validated in-sample + walk-forward but has seen **NO forward data**. Closing
+that gap is what the whole research-harness-first discipline was built for; it's free; and
+the reconciliation tooling (`monitor.reconcile` / `monitor.edge_decay_report`) already
+exists. Goal: turn "backtested 0.61 WF OOS" into "confirmed forward" and catch live-vs-
+backtest divergence early — the exact failure mode the parent project never instrumented.
+
+A1. [ ] **Daily target-position generator** (`scripts/generate_targets.py`). Incrementally
+    refresh prices (yfinance → append cache) + COT (weekly), run the validated config
+    (core 19 + governor + 30% buffer + `--cot`) on full history, emit target units per
+    instrument as of the latest close → `data/live_targets.jsonl` (date-stamped). Strict
+    no-lookahead: only data through the prior close.
+
+A2. [ ] **No-broker shadow paper book first** (`scripts/shadow_book.py`). Mark yesterday's
+    targets to today's close → realised daily return; append to `data/live_returns.csv`.
+    No broker needed — this alone answers the core question (does forward return track the
+    backtest?). Cheapest; do before any broker wiring.
+
+A3. [ ] **Daily reconciliation report** (`scripts/reconcile.py`). Compare the shadow book's
+    realised returns to the engine's modeled returns for the same dates via
+    `monitor.reconcile` (corr / tracking error / drift) + `edge_decay_report` (rolling-1y
+    Sharpe + alarm). Persist + print — the live-vs-backtest harness the parent lacked.
+
+A4. [ ] **Schedule it** (launchd/cron, after the US close). Reuse the parent's launchd
+    pattern (`com.signal.*`); run A1→A2→A3 daily; idempotent + holiday/missing-data resilient.
+
+A5. [ ] **Optional: Alpaca paper execution.** Once the shadow book confirms tracking, submit
+    orders to match targets on the 19 ETFs via Alpaca paper (reuse the parent's creds/infra)
+    to capture REAL fills/slippage, then reconcile fills vs targets (the execution gap).
+
+A6. [ ] **Guardrails / kill-switch.** If the edge-decay alarm fires (rolling 1y Sharpe <
+    floor) or tracking error blows out vs backtest, flag/halt + alert — a self-correcting
+    rail, not silent drift (the parent's silent-failure lesson).
+
+A7. [ ] **Forward-confirm `--cot` specifically.** Record whether COT is on in the target gen
+    so the accruing live data answers the one open COT question — does the +0.02 WF OOS hold
+    forward? The promote-COT-to-default decision waits on this.
+
+A8. [ ] **Runbook** (`docs/FORWARD.md`): start/stop the loop, read the reconciliation report,
+    and what each alarm means.
+
+---
+
 ## Tier 0 — buildable NOW on data already in hand (no paid feed)
 
 Need only the cached 19-ETF panel, free yfinance, and the parent project's existing
