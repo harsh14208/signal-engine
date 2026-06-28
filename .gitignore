@@ -17,6 +17,11 @@ data/launchd_*.log
 data/cache/
 data/experiments.jsonl
 
+# Secrets — NEVER commit real credentials
+.env
+.env.local
+!.env.example
+
 # OS / editor
 .DS_Store
 .vscode/
