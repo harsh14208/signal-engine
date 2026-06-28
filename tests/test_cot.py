@@ -41,7 +41,7 @@ def test_build_forecast_panel_monkeypatched(monkeypatch):
     monkeypatch.setattr(
         cot_data,
         "build_cot_signal_panel",
-        lambda prices, expanded=False, tag=None: sig.reindex(prices.index),
+        lambda prices, expanded=False, tag=None, refresh=False: sig.reindex(prices.index),
     )
     panel = cot_data.build_cot_forecast_panel(prices)
     assert "SPY" in panel.columns and "EEM" not in panel.columns

@@ -98,7 +98,11 @@ def _fetch_market(include: list[str], exclude: list[str]) -> pd.Series | None:
 
 
 def build_cot_signal_panel(
-    prices: pd.DataFrame, expanded: bool = False, use_cache: bool = True, tag: str | None = None
+    prices: pd.DataFrame,
+    expanded: bool = False,
+    use_cache: bool = True,
+    tag: str | None = None,
+    refresh: bool = False,
 ) -> pd.DataFrame:
     """Daily (weekly-ffilled) net-positioning signal per mappable instrument."""
     tag = tag or ("expanded" if expanded else "core")
@@ -107,7 +111,7 @@ def build_cot_signal_panel(
     if not syms:
         return pd.DataFrame(index=prices.index)
 
-    if use_cache and os.path.exists(cache):
+    if not refresh and use_cache and os.path.exists(cache):
         cached = pd.read_parquet(cache)
         cached.index = pd.to_datetime(cached.index)
         if set(syms).issubset(set(cached.columns)):
@@ -154,10 +158,14 @@ def cot_forecast(
 
 
 def build_cot_forecast_panel(
-    prices: pd.DataFrame, expanded: bool = False, tag: str | None = None, momentum: bool = False
+    prices: pd.DataFrame,
+    expanded: bool = False,
+    tag: str | None = None,
+    momentum: bool = False,
+    refresh: bool = False,
 ) -> pd.DataFrame:
     """Full-history COT forecast per instrument, aligned to `prices.index`."""
-    sig = build_cot_signal_panel(prices, expanded=expanded, tag=tag)
+    sig = build_cot_signal_panel(prices, expanded=expanded, tag=tag, refresh=refresh)
     if sig.empty:
         return pd.DataFrame(index=prices.index)
     fc = {c: cot_forecast(sig[c], momentum=momentum) for c in sig.columns}

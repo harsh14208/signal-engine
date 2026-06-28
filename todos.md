@@ -5,7 +5,9 @@ MaxDD −38%, vol on target (21.4%); clears placebo + Lo CI, and now **clears De
 Sharpe at the honest trial count**. The honest read is the **4-fold walk-forward**
 (mean OOS **0.61**, gap +0.12), NOT the single 70/30 split (OOS 0.55).
 Validated wins: realised-vol **governor** and **30% position buffer**. 🟢 **NEW —
-`--cot` (CFTC Commitments-of-Traders positioning) is the FIRST free signal to clear
+forward-deployment harness (Tier A) is live: no-broker shadow book + reconciliation +
+guardrails + optional Alpaca paper.** 🟢 **NEW — `--cot` (CFTC Commitments-of-Traders
+positioning) is the FIRST free signal to clear
 the walk-forward** (full 0.69→0.72, single-split OOS 0.55→0.60, walk-forward mean
 OOS 0.61→0.63, block-boot P5 0.34→0.38; pre-specified contrarian sign). Kept opt-in
 (network fetch + modest, fold-concentrated margin) — recommended for promotion
@@ -58,39 +60,40 @@ the reconciliation tooling (`monitor.reconcile` / `monitor.edge_decay_report`) a
 exists. Goal: turn "backtested 0.61 WF OOS" into "confirmed forward" and catch live-vs-
 backtest divergence early — the exact failure mode the parent project never instrumented.
 
-A1. [ ] **Daily target-position generator** (`scripts/generate_targets.py`). Incrementally
-    refresh prices (yfinance → append cache) + COT (weekly), run the validated config
-    (core 19 + governor + 30% buffer + `--cot`) on full history, emit target units per
-    instrument as of the latest close → `data/live_targets.jsonl` (date-stamped). Strict
-    no-lookahead: only data through the prior close.
+A1. [x] **Daily target-position generator** (`scripts/generate_targets.py`). Refreshes prices
+    + COT, runs the validated config (core 19 + governor + 30% buffer + COT), and appends
+    target units/notional/forecast to `data/live_targets.jsonl`. COT refresh falls back to
+    cache if the network fails. Added `BacktestResult.buffered` so the live target is the
+    post-buffer position to hold next close (no lookahead).
 
-A2. [ ] **No-broker shadow paper book first** (`scripts/shadow_book.py`). Mark yesterday's
-    targets to today's close → realised daily return; append to `data/live_returns.csv`.
-    No broker needed — this alone answers the core question (does forward return track the
-    backtest?). Cheapest; do before any broker wiring.
+A2. [x] **No-broker shadow paper book first** (`scripts/shadow_book.py`). Marks the next-day
+    shadow return using closing prices and appends to `data/live_returns.csv`. No broker
+    required — the cheapest way to answer "does forward track the backtest?".
 
-A3. [ ] **Daily reconciliation report** (`scripts/reconcile.py`). Compare the shadow book's
-    realised returns to the engine's modeled returns for the same dates via
-    `monitor.reconcile` (corr / tracking error / drift) + `edge_decay_report` (rolling-1y
-    Sharpe + alarm). Persist + print — the live-vs-backtest harness the parent lacked.
+A3. [x] **Daily reconciliation report** (`scripts/reconcile.py`). Compares live vs modeled
+    returns via `monitor.reconcile` (corr / tracking error / drift) and
+    `monitor.edge_decay_report` (rolling 1y Sharpe). Persists JSON under
+    `data/reconciliation/YYYY-MM-DD.json` and prints a markdown summary.
 
-A4. [ ] **Schedule it** (launchd/cron, after the US close). Reuse the parent's launchd
-    pattern (`com.signal.*`); run A1→A2→A3 daily; idempotent + holiday/missing-data resilient.
+A4. [x] **Schedule it** (launchd). Added `scripts/forward_loop.sh`,
+    `scripts/launchd/com.signal.engine.forward.plist`, and `scripts/install_launchd.sh` /
+    `uninstall_launchd.sh`. Runs daily at 17:30 local time; idempotent and holiday-safe.
 
-A5. [ ] **Optional: Alpaca paper execution.** Once the shadow book confirms tracking, submit
-    orders to match targets on the 19 ETFs via Alpaca paper (reuse the parent's creds/infra)
-    to capture REAL fills/slippage, then reconcile fills vs targets (the execution gap).
+A5. [x] **Optional: Alpaca paper execution** (`scripts/execute_alpaca.py`). Reads latest
+    target, computes delta notional vs current Alpaca positions, submits fractional notional
+    orders (paper by default; `--live` explicit), and logs fills to
+    `data/broker_orders.jsonl`. Respects the kill switch.
 
-A6. [ ] **Guardrails / kill-switch.** If the edge-decay alarm fires (rolling 1y Sharpe <
-    floor) or tracking error blows out vs backtest, flag/halt + alert — a self-correcting
-    rail, not silent drift (the parent's silent-failure lesson).
+A6. [x] **Guardrails / kill-switch.** `scripts/reconcile.py` writes `data/kill_switch.json`
+    (`paused: true`) when reconciliation is not aligned or rolling 1y Sharpe drops below
+    `--alarm-floor` (default 0.0). `execute_alpaca.py` refuses new orders while paused.
 
-A7. [ ] **Forward-confirm `--cot` specifically.** Record whether COT is on in the target gen
-    so the accruing live data answers the one open COT question — does the +0.02 WF OOS hold
-    forward? The promote-COT-to-default decision waits on this.
+A7. [x] **Forward-confirm `--cot` specifically.** Every target record stores `use_cot`,
+    `cot_momentum`, and `cot_as_of`; `live_returns.csv` stores `use_cot`. This lets the
+    accruing forward data answer whether the COT walk-forward edge holds.
 
-A8. [ ] **Runbook** (`docs/FORWARD.md`): start/stop the loop, read the reconciliation report,
-    and what each alarm means.
+A8. [x] **Runbook** (`docs/FORWARD.md`): start/stop commands, artifact descriptions, alarm
+    meanings, kill-switch handling, and Alpaca credential setup.
 
 ---
 

@@ -47,7 +47,8 @@ class BacktestResult:
     equity: pd.Series  # net equity curve (starts at 1.0)
     per_instrument_returns: pd.DataFrame
     per_instrument_gross: pd.DataFrame
-    positions: pd.DataFrame  # effective units held
+    positions: pd.DataFrame  # effective units held (shifted buffered targets)
+    buffered: pd.DataFrame  # post-buffer target units at each close
     notional: pd.DataFrame
     forecasts: pd.DataFrame  # combined forecast per instrument
     turnover: pd.Series  # daily traded-notional / capital
@@ -275,6 +276,11 @@ def _execute_backtest(
 
     sim = _simulate(governed, prices, mult, cost_bps, config.capital, config.buffer_fraction)
     equity = (1.0 + sim["daily"]).cumprod()
+    # Recompute the buffered targets for live use (last-row = next-day target).
+    buffered = pd.DataFrame(
+        {c: apply_buffer(governed[c], config.buffer_fraction) for c in governed.columns},
+        index=index,
+    )
 
     # Store the *final* parameter values for reporting/walk-forward reuse.
     final_weights = weights_df.iloc[-1].to_dict() if len(weights_df) else {s: 0.0 for s in symbols}
@@ -288,6 +294,7 @@ def _execute_backtest(
         per_instrument_returns=sim["per_inst"],
         per_instrument_gross=sim["per_inst_gross"],
         positions=sim["eff"],
+        buffered=buffered,
         notional=sim["notional"],
         forecasts=forecasts,
         turnover=sim["turnover"],

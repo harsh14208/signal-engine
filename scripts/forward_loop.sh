@@ -1,0 +1,28 @@
+#!/bin/bash
+set -euo pipefail
+# Daily forward loop for signal-engine (Tier A).
+# Runs after the US close. Keeps caches warm, generates targets, marks shadow
+# returns, and reconciles. Alpaca execution is commented out until shadow-book
+# tracking is confirmed.
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# Activate the project virtual environment.
+# shellcheck source=/dev/null
+source .venv/bin/activate
+
+# 1. Refresh ETF price cache (yfinance).
+python scripts/warm_cache.py
+
+# 2. Generate target positions for the next session.
+python scripts/generate_targets.py --source auto
+
+# 3. Mark the shadow return for the day that just closed.
+python scripts/shadow_book.py --source auto
+
+# 4. Reconcile shadow returns vs the backtest and update guardrails.
+python scripts/reconcile.py --source auto
+
+# 5. (Optional) Submit orders to Alpaca paper once shadow tracking is confirmed.
+# python scripts/execute_alpaca.py --paper
