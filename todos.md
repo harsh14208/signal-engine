@@ -185,8 +185,13 @@ walk-forward (not a single split) before promoting** (see the ship-candidate les
     per-instrument feature that is). **Result:** full 0.69→0.72, single-split OOS 0.55→0.60,
     **walk-forward mean OOS 0.61→0.63**, block-boot P5 0.34→0.38, clears Deflated @29 trials
     + placebo. Modest + fold-concentrated (one 2018–22 fold does much of it) and needs a CFTC
-    fetch → kept **opt-in / VALIDATED-POSITIVE**, not auto-promoted to default. Next: map
-    more instruments; A/B the momentum sign honestly; forward-confirm via `--monitor`.
+    fetch → kept **opt-in / VALIDATED-POSITIVE**, not auto-promoted to default.
+    **Broadening coverage via `--expanded-universe --cot` tested → INERT on the walk-forward
+    (mean OOS 0.54→0.54, full 0.70→0.69):** the COT-mapped instruments fall from ~53% of the
+    core book to ~33% of the expanded book, so the positioning signal dilutes, and the
+    expanded base is itself weaker. COT's value is **concentrated on the core macro universe**,
+    not broadened. Next, if pushed: a surgical "core + diversifying-commodity (UNG/CORN/WEAT)
+    COT" universe; A/B the momentum sign honestly; forward-confirm via `--monitor`.
 
 ## Tier 1 — highest expected value (do next)
 
