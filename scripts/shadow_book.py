@@ -43,6 +43,11 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_RETURNS_PATH,
         help="path to live-returns CSV",
     )
+    p.add_argument(
+        "--end",
+        default=None,
+        help="optional as-of date for historical replay (YYYY-MM-DD)",
+    )
     args = p.parse_args(argv)
 
     target = load_latest_target(args.targets)
@@ -50,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         res = append_shadow_return(
             target=target,
             source=args.source,
+            end=args.end,
             returns_path=args.returns,
         )
     except Exception as exc:

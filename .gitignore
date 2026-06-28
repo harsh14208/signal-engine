@@ -10,6 +10,10 @@ venv/
 # Data cache (prices are re-fetchable; don't commit)
 data/*.parquet
 data/*.csv
+data/*.jsonl
+data/reconciliation/
+data/kill_switch.json
+data/launchd_*.log
 data/cache/
 data/experiments.jsonl
 

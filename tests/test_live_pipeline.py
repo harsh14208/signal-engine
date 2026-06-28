@@ -100,6 +100,20 @@ class TestGenerateTarget:
         assert res["record"]["use_cot"] is False
         assert res["record"]["cot_as_of"] is None
 
+    def test_generate_target_honors_end_date(self, tmp_path, full_prices):
+        targets = tmp_path / "targets.jsonl"
+        end_date = full_prices.index[-10].strftime("%Y-%m-%d")
+        with patch.object(live, "load_prices", return_value=full_prices):
+            res = generate_target(
+                source="cache",
+                cot=False,
+                refresh_cot=False,
+                end=end_date,
+                targets_path=targets,
+            )
+        assert res["record"]["date"] == end_date
+        assert res["record"]["as_of"] == end_date
+
 
 class TestShadowBook:
     def test_compute_shadow_return(self):
@@ -159,10 +173,10 @@ class TestReconciliation:
         record = build_target_record(result, cfg, cot=cot_panel)
         targets.write_text(json.dumps(record) + "\n")
 
-        # Live returns = modeled returns → perfect tracking.
+        # Live returns = modeled GROSS returns (shadow has no costs) → perfect tracking.
         live_df = pd.DataFrame({
-            "date": result.daily_returns.index.strftime("%Y-%m-%d"),
-            "live_return": result.daily_returns.values,
+            "date": result.gross_returns.index.strftime("%Y-%m-%d"),
+            "live_return": result.gross_returns.values,
             "mode": "shadow",
             "use_cot": True,
         })
@@ -182,6 +196,7 @@ class TestReconciliation:
         rec = res["report"]["reconciliation"]
         assert rec["corr"] > 0.95
         assert rec["aligned"] is True
+        assert res["report"]["compare_to"] == "gross"
         assert res["kill_switch"]["paused"] is False
         assert len(list(recon_dir.glob("*.json"))) == 1
 

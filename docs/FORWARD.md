@@ -20,6 +20,28 @@ paper-execution line in `scripts/forward_loop.sh`.
 5. `scripts/execute_alpaca.py` *(commented out)* — submits delta notional orders
    to Alpaca paper once shadow tracking is confirmed.
 
+## Shadow gross vs. modeled net
+
+The no-broker shadow book has **no real costs** — it marks closing prices against
+the target units. The offline backtest's `daily_returns` are **net of the 1.5 bps
+flat-cost assumption**. Comparing the two would show a built-in ~+0.45%/yr drift
+that is just the assumed cost, not real slippage.
+
+`reconcile.py` therefore compares:
+
+- `mode=shadow` rows → modeled **gross** returns (`BacktestResult.gross_returns`).
+- `mode=paper` or `mode=live` rows → modeled **net** returns (`BacktestResult.daily_returns`).
+
+So the `drift` metric is meaningful: for the shadow book it should stay near zero;
+for the broker path it measures execution slippage vs. the assumed cost.
+
+## Historical replay / bootstrapping
+
+`scripts/generate_targets.py --end YYYY-MM-DD` now slices the cached price panel
+to that date, so you can generate a historical target and replay the shadow book
+one day at a time. This is useful for dry-running the loop, but it is **not** a
+substitute for forward data — the honest validation only accrues live days.
+
 ## Quick start
 
 ```bash

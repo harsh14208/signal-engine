@@ -24,6 +24,15 @@ from .monitor import edge_decay_report, reconcile
 
 _DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_TARGETS_PATH = _DATA_DIR / "live_targets.jsonl"
+
+
+def _slice_prices(prices: pd.DataFrame, start: str | None = None, end: str | None = None) -> pd.DataFrame:
+    """Honour start/end even when the loader (e.g., cache) returned a wider panel."""
+    if start is not None:
+        prices = prices.loc[prices.index >= pd.Timestamp(start)]
+    if end is not None:
+        prices = prices.loc[prices.index <= pd.Timestamp(end)]
+    return prices
 DEFAULT_RETURNS_PATH = _DATA_DIR / "live_returns.csv"
 DEFAULT_RECON_DIR = _DATA_DIR / "reconciliation"
 DEFAULT_KILL_SWITCH_PATH = _DATA_DIR / "kill_switch.json"
@@ -169,6 +178,7 @@ def generate_target(
     syms = symbols(expanded=False)
     end = end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     prices = load_prices(syms, start="2007-01-01", end=end, source=source, cache_tag="universe")
+    prices = _slice_prices(prices, end=end)
     if prices.empty or len(prices) < 2:
         raise RuntimeError("No price data available for target generation")
 
@@ -225,6 +235,7 @@ def compute_shadow_return(
 def append_shadow_return(
     target: dict[str, Any] | None,
     source: str = "auto",
+    end: str | None = None,
     returns_path: Path | str = DEFAULT_RETURNS_PATH,
     prices: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
@@ -236,8 +247,9 @@ def append_shadow_return(
 
     if prices is None:
         syms = [s for s in target["units"] if s]
-        end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        end = end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         prices = load_prices(syms, start=target["date"], end=end, source=source, cache_tag="universe")
+        prices = _slice_prices(prices, start=target["date"], end=end)
 
     computed = compute_shadow_return(target, prices)
     if computed is None:
@@ -274,6 +286,7 @@ def build_backtest_for_reconciliation(
     syms = symbols(expanded=False)
     end = end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     prices = load_prices(syms, start="2007-01-01", end=end, source=source, cache_tag="universe")
+    prices = _slice_prices(prices, end=end)
     cot = (
         build_cot_forecast_panel(prices, tag="core", momentum=cfg.cot_momentum)
         if cfg.use_cot
@@ -292,6 +305,17 @@ def load_live_returns(path: Path | str = DEFAULT_RETURNS_PATH) -> pd.Series:
     return df.set_index("date")["live_return"].sort_index()
 
 
+def load_live_return_modes(path: Path | str = DEFAULT_RETURNS_PATH) -> pd.Series:
+    """Load the mode (shadow / paper / live) per live-return date."""
+    path = Path(path)
+    if not path.exists():
+        return pd.Series(dtype=str, name="mode")
+    df = pd.read_csv(path, parse_dates=["date"])
+    if "mode" not in df.columns:
+        return pd.Series("shadow", index=df["date"], name="mode").sort_index()
+    return df.set_index("date")["mode"].sort_index()
+
+
 def run_reconciliation(
     target: dict[str, Any] | None = None,
     source: str = "auto",
@@ -306,14 +330,24 @@ def run_reconciliation(
     kill_switch_path = Path(kill_switch_path)
     recon_dir.mkdir(parents=True, exist_ok=True)
 
-    modeled, result = build_backtest_for_reconciliation(target, source=source)
+    modeled_series, result = build_backtest_for_reconciliation(target, source=source)
     live = load_live_returns(returns_path)
+    modes = load_live_return_modes(returns_path)
+    # Shadow returns are costless, so compare to modeled gross. Broker modes have
+    # real costs, so compare to modeled net.
+    compare_gross = (
+        bool((modes.reindex(live.index).fillna("shadow") == "shadow").all())
+        if not modes.empty
+        else True
+    )
+    modeled = result.gross_returns if compare_gross else modeled_series
     rec = reconcile(live, modeled)
     edge = edge_decay_report(live, alarm_floor=alarm_floor)
 
     report = {
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "target_date": target.get("date") if target else None,
+        "compare_to": "gross" if compare_gross else "net",
         "modeled_sharpe": float(sharpe(result.daily_returns)),
         "live_sharpe": float(sharpe(live)) if len(live) > 60 else None,
         "reconciliation": rec,
@@ -339,7 +373,7 @@ def run_reconciliation(
     if kill["paused"]:
         kill_switch_path.write_text(json.dumps(kill, indent=2, default=str))
 
-    out_path = recon_dir / f"{pd.Timestamp.now(tz='UTC').strftime('%Y-%m-%d')}.json"
+    out_path = recon_dir / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.json"
     out_path.write_text(json.dumps(report, indent=2, default=str))
     return {"report": report, "kill_switch": kill, "path": str(out_path)}
 

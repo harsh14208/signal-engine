@@ -30,6 +30,7 @@ def _fmt_report(report: dict) -> str:
     lines = ["# Forward reconciliation report\n"]
     lines.append(f"- Report date: **{report['date']}**")
     lines.append(f"- Target date: **{report['target_date']}**")
+    lines.append(f"- Comparison: **modeled {report.get('compare_to', 'net')}** vs live {report['target_date']}")
     lines.append(f"- Modeled Sharpe (full history): **{report['modeled_sharpe']:.2f}**")
     if report.get("live_sharpe") is not None:
         lines.append(f"- Live Sharpe (to date): **{report['live_sharpe']:.2f}**")
