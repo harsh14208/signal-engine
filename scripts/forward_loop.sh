@@ -24,5 +24,6 @@ python scripts/shadow_book.py --source auto
 # 4. Reconcile shadow returns vs the backtest and update guardrails.
 python scripts/reconcile.py --source auto
 
-# 5. (Optional) Submit orders to Alpaca paper once shadow tracking is confirmed.
-# python scripts/execute_alpaca.py --paper
+# 5. Submit orders to Alpaca PAPER to match the target (reads ALPACA_SE_* creds;
+#    respects the kill switch). Enabled 2026-06-29 for forward-test execution.
+python scripts/execute_alpaca.py --paper

@@ -110,17 +110,20 @@ def get_positions(base: str, key: str, secret: str) -> list[dict[str, Any]]:
     return _request(base, POSITIONS_PATH, key, secret, method="GET")
 
 
-def place_notional_order(
+def place_qty_order(
     base: str,
     key: str,
     secret: str,
     symbol: str,
-    notional: float,
+    qty: int,
     side: str,
 ) -> dict[str, Any]:
+    # WHOLE-SHARE quantity orders. Alpaca does NOT allow fractional SHORT positions,
+    # and this engine takes both long and short legs — notional/fractional orders 422
+    # on every short. Whole shares work for both directions.
     body = {
         "symbol": symbol.upper(),
-        "notional": str(round(abs(notional), 2)),
+        "qty": str(int(abs(qty))),
         "side": side.lower(),
         "type": "market",
         "time_in_force": "day",
@@ -128,12 +131,37 @@ def place_notional_order(
     return _request(base, ORDERS_PATH, key, secret, method="POST", body=body)
 
 
+def cancel_all_orders(base: str, key: str, secret: str) -> None:
+    """Cancel all open orders (so a re-run doesn't duplicate still-pending orders)."""
+    try:
+        _request(base, ORDERS_PATH, key, secret, method="DELETE")
+    except Exception:
+        pass
+
+
+_shortable_cache: dict[str, bool] = {}
+
+
+def is_shortable(base: str, key: str, secret: str, symbol: str) -> bool:
+    """Whether Alpaca allows shorting this asset. Some currency/sector ETFs are not;
+    the engine's short leg there can't be replicated on the paper account."""
+    sym = symbol.upper()
+    if sym not in _shortable_cache:
+        try:
+            asset = _request(base, f"/v2/assets/{sym}", key, secret)
+            _shortable_cache[sym] = bool(asset.get("shortable", True))
+        except Exception:
+            _shortable_cache[sym] = True  # assume yes; the order will 422 if not
+    return _shortable_cache[sym]
+
+
 def execute_targets(
     target: dict[str, Any],
     live: bool = False,
-    min_notional: float = 1.0,
+    min_shares: int = 1,
     orders_path: Path | str = repo_root / "data" / "broker_orders.jsonl",
     kill_switch: dict[str, Any] | None = None,
+    cancel_open: bool = True,
 ) -> dict[str, Any]:
     orders_path = Path(orders_path)
     orders_path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,43 +173,47 @@ def execute_targets(
 
     key, secret = _credentials(live)
     base = LIVE_BASE if live else PAPER_BASE
+    # Cancel still-pending orders first so we reconcile against held positions only
+    # (otherwise an after-close re-run double-submits the orders waiting at the open).
+    if cancel_open:
+        cancel_all_orders(base, key, secret)
     positions = get_positions(base, key, secret)
     current: dict[str, float] = {}
     for pos in positions:
         sym = str(pos.get("symbol", "")).upper()
-        mv = pos.get("market_value") or pos.get("current_price") or 0.0
-        qty = pos.get("qty") or 0.0
-        if not mv and qty:
-            mv = float(qty) * float(pos.get("current_price") or 0.0)
-        current[sym] = float(mv)
+        current[sym] = float(pos.get("qty") or 0.0)  # signed; negative = short
 
-    target_notional = {
-        k.upper(): (0.0 if v is None else float(v))
-        for k, v in target.get("notional", {}).items()
-        if v is not None
+    # Target units are share counts (ETF multiplier = 1) → trade WHOLE shares.
+    target_shares = {
+        k.upper(): round(float(v)) for k, v in target.get("units", {}).items() if v is not None
     }
-    all_syms = sorted(set(target_notional) | set(current))
+    all_syms = sorted(set(target_shares) | set(current))
     submitted: list[dict[str, Any]] = []
     ts = target.get("generated_at")
 
     for sym in all_syms:
-        tgt = target_notional.get(sym, 0.0)
-        cur = current.get(sym, 0.0)
+        tgt = target_shares.get(sym, 0)
+        cur = round(current.get(sym, 0.0))
         delta = tgt - cur
-        if abs(delta) < min_notional:
+        if abs(delta) < min_shares:
             continue
         side = "buy" if delta > 0 else "sell"
-        try:
-            resp = place_notional_order(base, key, secret, sym, delta, side)
-        except Exception as exc:
-            resp = {"error": str(exc)}
+        if side == "sell" and tgt < 0 and not is_shortable(base, key, secret, sym):
+            # Non-shortable asset (e.g. some currency ETFs) — skip cleanly; the
+            # no-broker shadow book remains the true reference for that short leg.
+            resp: dict[str, Any] = {"skipped": "not_shortable"}
+        else:
+            try:
+                resp = place_qty_order(base, key, secret, sym, abs(delta), side)
+            except Exception as exc:
+                resp = {"error": str(exc)}
         record = {
             "generated_at": ts,
             "target_date": target.get("date"),
             "symbol": sym,
-            "target_notional": tgt,
-            "current_notional": cur,
-            "delta": delta,
+            "target_shares": tgt,
+            "current_shares": cur,
+            "delta_shares": delta,
             "side": side,
             "live": live,
             "response": resp,
@@ -204,10 +236,11 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--live", action="store_true", help="use Alpaca live account")
     p.add_argument("--targets", type=Path, default=DEFAULT_TARGETS_PATH)
     p.add_argument(
-        "--min-notional",
-        type=float,
-        default=1.0,
-        help="minimum dollar delta to submit an order",
+        "--min-shares",
+        type=int,
+        default=1,
+        dest="min_shares",
+        help="minimum whole-share delta to submit an order",
     )
     p.add_argument(
         "--orders-output",
@@ -231,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         res = execute_targets(
             target=target,
             live=args.live,
-            min_notional=args.min_notional,
+            min_shares=args.min_shares,
             orders_path=args.orders_output,
             kill_switch=kill,
         )
@@ -243,10 +276,25 @@ def main(argv: list[str] | None = None) -> int:
         print("No orders submitted: kill switch is engaged.")
         return 2
 
-    print(f"Submitted {len(res['submitted'])} orders ({'LIVE' if args.live else 'PAPER'}).")
-    for rec in res["submitted"]:
-        print(f"  {rec['symbol']:6s} {rec['side']:4s} ${abs(rec['delta']):,.2f}")
-    return 0
+    subs = res["submitted"]
+
+    def _resp(r):
+        return r.get("response") if isinstance(r.get("response"), dict) else {}
+
+    accepted = [r for r in subs if _resp(r).get("id")]
+    skipped = [r for r in subs if _resp(r).get("skipped")]
+    rejected = [r for r in subs if not _resp(r).get("id") and not _resp(r).get("skipped")]
+    print(
+        f"{len(accepted)}/{len(subs)} orders ACCEPTED "
+        f"({'LIVE' if args.live else 'PAPER'}); {len(skipped)} skipped (non-shortable)."
+    )
+    for rec in subs:
+        resp = _resp(rec)
+        flag = "ok " if resp.get("id") else ("skip" if resp.get("skipped") else "ERR")
+        print(f"  [{flag}] {rec['symbol']:6s} {rec['side']:4s} {abs(rec['delta_shares'])} sh")
+    if rejected:
+        print(f"  ⚠ {len(rejected)} rejected — first: {str(rejected[0]['response'])[:140]}")
+    return len(rejected) > 0
 
 
 if __name__ == "__main__":
