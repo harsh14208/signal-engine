@@ -18,8 +18,9 @@ def main(start: str = "2007-01-01") -> int:
     syms = symbols()
     print(f"Fetching {len(syms)} symbols from {start} via yfinance…")
     px = load_prices(syms, start=start, source="yfinance")
-    print(f"\nCached {px.shape[1]} instruments × {px.shape[0]} rows "
-          f"→ data/prices_universe.parquet\n")
+    print(
+        f"\nCached {px.shape[1]} instruments × {px.shape[0]} rows → data/prices_universe.parquet\n"
+    )
     print(f"{'sym':6s}{'first':12s}{'last':12s}{'bars':>7s}")
     for s in syms:
         if s in px.columns and px[s].first_valid_index() is not None:

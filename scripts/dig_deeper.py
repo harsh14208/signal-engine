@@ -83,7 +83,11 @@ def expanded_regime_sweep() -> list[dict]:
     rows = []
     for buf in (0.10, 0.15, 0.20, 0.30):
         for smooth in (None, 5, 10, 20):
-            rg = base_regime if smooth is None else base_regime.ewm(span=smooth, min_periods=1).mean()
+            rg = (
+                base_regime
+                if smooth is None
+                else base_regime.ewm(span=smooth, min_periods=1).mean()
+            )
             cfg = Config(
                 use_expanded_universe=True,
                 use_regime_overlay=False,  # pass regime manually
@@ -132,10 +136,14 @@ def main() -> None:
     print("\n=== Interpretation ===")
     best_exp = sorted(expanded_rows, key=lambda r: r["oos_sr"], reverse=True)[0]
     best_reg = sorted(regime_rows, key=lambda r: r["oos_sr"], reverse=True)[0]
-    print(f"Best expanded+regime by OOS: {best_exp['name']} → OOS {best_exp['oos_sr']:.2f}, "
-          f"net {best_exp['net_sr']:.2f}, turnover {best_exp['turnover']:.1f}x")
-    print(f"Best regime variant by OOS: {best_reg['name']} → OOS {best_reg['oos_sr']:.2f}, "
-          f"net {best_reg['net_sr']:.2f}, turnover {best_reg['turnover']:.1f}x")
+    print(
+        f"Best expanded+regime by OOS: {best_exp['name']} → OOS {best_exp['oos_sr']:.2f}, "
+        f"net {best_exp['net_sr']:.2f}, turnover {best_exp['turnover']:.1f}x"
+    )
+    print(
+        f"Best regime variant by OOS: {best_reg['name']} → OOS {best_reg['oos_sr']:.2f}, "
+        f"net {best_reg['net_sr']:.2f}, turnover {best_reg['turnover']:.1f}x"
+    )
 
 
 if __name__ == "__main__":

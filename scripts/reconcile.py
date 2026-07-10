@@ -30,7 +30,9 @@ def _fmt_report(report: dict) -> str:
     lines = ["# Forward reconciliation report\n"]
     lines.append(f"- Report date: **{report['date']}**")
     lines.append(f"- Target date: **{report['target_date']}**")
-    lines.append(f"- Comparison: **modeled {report.get('compare_to', 'net')}** vs live {report['target_date']}")
+    lines.append(
+        f"- Comparison: **modeled {report.get('compare_to', 'net')}** vs live {report['target_date']}"
+    )
     lines.append(f"- Modeled Sharpe (full history): **{report['modeled_sharpe']:.2f}**")
     if report.get("live_sharpe") is not None:
         lines.append(f"- Live Sharpe (to date): **{report['live_sharpe']:.2f}**")
@@ -40,8 +42,10 @@ def _fmt_report(report: dict) -> str:
         lines.append(f"- Insufficient live data (n={rec.get('n', 0)}).")
     else:
         status = "✅ aligned" if rec["aligned"] else "⚠ NOT aligned"
-        lines.append(f"- n={rec['n']}  corr={rec['corr']:.2f}  "
-                     f"tracking_error={rec['tracking_error']:.2%}  drift={rec['drift']:.2%}  **{status}**")
+        lines.append(
+            f"- n={rec['n']}  corr={rec['corr']:.2f}  "
+            f"tracking_error={rec['tracking_error']:.2%}  drift={rec['drift']:.2%}  **{status}**"
+        )
     lines.append("")
     lines.append("## Edge decay (rolling 1y Sharpe)\n")
     if edge.get("insufficient"):
@@ -57,9 +61,7 @@ def _fmt_report(report: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(
-        description="Reconcile shadow/live returns against the backtest."
-    )
+    p = argparse.ArgumentParser(description="Reconcile shadow/live returns against the backtest.")
     p.add_argument(
         "--source",
         default="auto",

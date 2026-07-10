@@ -53,7 +53,9 @@ def _build_signal_stress_overlay(prices: pd.DataFrame) -> pd.Series:
     df["date"] = df["created_at"].dt.date
     df["date"] = pd.to_datetime(df["date"])
     # Drop skipped and HOLD-only noise; focus on directional recommendations.
-    directional = df[(df["is_skipped"].astype(str) == "f") & (df["action"].isin(["BUY", "SELL"]))].copy()
+    directional = df[
+        (df["is_skipped"].astype(str) == "f") & (df["action"].isin(["BUY", "SELL"]))
+    ].copy()
     if directional.empty:
         return pd.Series(1.0, index=prices.index)
     directional["conf"] = directional["confidence"].fillna(50.0)
@@ -114,7 +116,9 @@ def main() -> None:
     sv_window = (short_vol[short_vol < 1].index.min(), short_vol[short_vol < 1].index.max())
     ss_window = (sig_stress[sig_stress < 1].index.min(), sig_stress[sig_stress < 1].index.max())
 
-    print(f"\n=== Short-volume overlay active window: {sv_window[0].date()} → {sv_window[1].date()} ===\n")
+    print(
+        f"\n=== Short-volume overlay active window: {sv_window[0].date()} → {sv_window[1].date()} ===\n"
+    )
     _print_rows(
         [
             _eval("baseline", prices, cfg, window=sv_window),
@@ -123,21 +127,27 @@ def main() -> None:
     )
 
     if ss_window[0] is not pd.NaT:
-        print(f"\n=== TRS signal-stress overlay active window: {ss_window[0].date()} → {ss_window[1].date()} ===\n")
+        print(
+            f"\n=== TRS signal-stress overlay active window: {ss_window[0].date()} → {ss_window[1].date()} ===\n"
+        )
         _print_rows(
             [
                 _eval("baseline", prices, cfg, window=ss_window),
-                _eval("+ TRS signal-stress overlay", prices, cfg_regime, sig_stress, window=ss_window),
+                _eval(
+                    "+ TRS signal-stress overlay", prices, cfg_regime, sig_stress, window=ss_window
+                ),
             ]
         )
 
 
 def _print_rows(rows: list[dict]) -> None:
-    print(f"{'name':40s} {'Net':>6s} {'IS':>6s} {'OOS':>6s} {'gap':>7s} {'turn':>7s} {'MaxDD':>7s} {'meanMult':>9s}")
+    print(
+        f"{'name':40s} {'Net':>6s} {'IS':>6s} {'OOS':>6s} {'gap':>7s} {'turn':>7s} {'MaxDD':>7s} {'meanMult':>9s}"
+    )
     for r in rows:
         print(
             f"{r['name']:40s} {r['net_sr']:6.2f} {r['is_sr']:6.2f} {r['oos_sr']:6.2f} "
-            f"{r['is_sr']-r['oos_sr']:+7.2f} {r['turnover']:7.1f}x {r['max_dd']:7.1%} {r['mean_mult']:9.2f}"
+            f"{r['is_sr'] - r['oos_sr']:+7.2f} {r['turnover']:7.1f}x {r['max_dd']:7.1%} {r['mean_mult']:9.2f}"
         )
 
 

@@ -65,7 +65,9 @@ def _run_one(name: str, cfg: Config) -> dict:
 
     regime = None
     if cfg.use_regime_overlay:
-        vix = load_vix(prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d"))
+        vix = load_vix(
+            prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
+        )
         regime = regime_overlay(
             prices,
             vix,
@@ -91,9 +93,13 @@ def _run_one(name: str, cfg: Config) -> dict:
         regime = vix_mult if regime is None else regime * vix_mult
 
     if cfg.use_credit_overlay:
-        spread = load_credit_spread(
-            prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
-        ).reindex(prices.index).ffill()
+        spread = (
+            load_credit_spread(
+                prices.index.min().strftime("%Y-%m-%d"), prices.index.max().strftime("%Y-%m-%d")
+            )
+            .reindex(prices.index)
+            .ffill()
+        )
         credit_mult = credit_overlay(
             spread,
             upper_thresh=cfg.credit_upper_thresh,
@@ -124,7 +130,11 @@ def _run_one(name: str, cfg: Config) -> dict:
     bb = block_bootstrap_sharpe(daily)
 
     mean_standalone = _mean_standalone_sharpe(result)
-    div_ratio = port_sr / mean_standalone if mean_standalone and not np.isnan(mean_standalone) else float("nan")
+    div_ratio = (
+        port_sr / mean_standalone
+        if mean_standalone and not np.isnan(mean_standalone)
+        else float("nan")
+    )
 
     return {
         "run": name,
@@ -153,7 +163,10 @@ def main() -> None:
         ("carry+scalars", Config(use_carry_proxies=True, use_empirical_scalars=True)),
         ("carry+regime", Config(use_carry_proxies=True, use_regime_overlay=True)),
         ("scalars+regime", Config(use_empirical_scalars=True, use_regime_overlay=True)),
-        ("carry+scalars+regime", Config(use_carry_proxies=True, use_empirical_scalars=True, use_regime_overlay=True)),
+        (
+            "carry+scalars+regime",
+            Config(use_carry_proxies=True, use_empirical_scalars=True, use_regime_overlay=True),
+        ),
         ("expanded_universe", Config(use_expanded_universe=True)),
         ("expanded+carry", Config(use_expanded_universe=True, use_carry_proxies=True)),
         ("expanded+regime", Config(use_expanded_universe=True, use_regime_overlay=True)),
