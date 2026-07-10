@@ -35,6 +35,12 @@ def main(argv: list[str] | None = None) -> int:
                    help="price source (default: cache — use real data, not synthetic)")
     p.add_argument("--no-cot", action="store_true", dest="no_cot")
     p.add_argument("--end", default=None, help="optional as-of date (YYYY-MM-DD)")
+    p.add_argument("--start", default="2007-01-01",
+                   help="history start (applied on yfinance fetch; cache returns full span)")
+    p.add_argument("--cache-tag", default="universe", dest="cache_tag",
+                   help="price cache tag (e.g. 'long' for the max-history panel)")
+    p.add_argument("--long", action="store_true",
+                   help="max-history mode: start 1999 + cache-tag 'long' (ragged pre-2007 basket)")
     p.add_argument("--returns", type=Path, default=DEFAULT_RETURNS_PATH,
                    help="live-returns CSV for the forward-track readout")
     p.add_argument("--n-trials", type=int, default=None,
@@ -47,14 +53,18 @@ def main(argv: list[str] | None = None) -> int:
     cfg = validated_config(cot=not args.no_cot)
     register_trial(cfg, label="edge_gate")  # this evaluation counts as a trial
 
+    start = "1999-01-01" if args.long else args.start
+    cache_tag = "long" if args.long else args.cache_tag
     end = args.end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
-        prices = load_prices(symbols(), start="2007-01-01", end=end,
-                             source=args.source, cache_tag="universe")
+        prices = load_prices(symbols(), start=start, end=end,
+                             source=args.source, cache_tag=cache_tag)
         prices = prices.loc[prices.index <= end] if args.end else prices
         if prices.empty or len(prices) < 300:
             print(f"Insufficient price history ({len(prices)} rows).", file=sys.stderr)
             return 3
+        span = f"{prices.index.min().date()}→{prices.index.max().date()} ({len(prices)/252:.1f}y)"
+        print(f"Panel: {span}, {prices.shape[1]} instruments\n")
         cot = build_cot_forecast_panel(prices, tag="core") if cfg.use_cot else None
         live = load_live_returns(args.returns) if Path(args.returns).exists() else None
         report = evaluate_edge(prices, cfg, cot=cot, live_returns=live, n_trials=args.n_trials)
