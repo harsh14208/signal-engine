@@ -78,8 +78,12 @@ class TestGenerateTarget:
     def test_generate_target_writes_and_is_idempotent(self, tmp_path, full_prices, cot_panel):
         targets = tmp_path / "targets.jsonl"
         with patch.object(live, "load_prices", return_value=full_prices):
-            with patch.object(live, "_build_cot_forecast_panel_with_fallback", return_value=cot_panel):
-                res1 = generate_target(source="cache", cot=True, refresh_cot=False, targets_path=targets)
+            with patch.object(
+                live, "_build_cot_forecast_panel_with_fallback", return_value=cot_panel
+            ):
+                res1 = generate_target(
+                    source="cache", cot=True, refresh_cot=False, targets_path=targets, snapshot_dir=tmp_path / "snaps"
+                )
 
         assert "record" in res1
         record = res1["record"]
@@ -87,8 +91,12 @@ class TestGenerateTarget:
         assert load_latest_target(targets)["date"] == record["date"]
 
         with patch.object(live, "load_prices", return_value=full_prices):
-            with patch.object(live, "_build_cot_forecast_panel_with_fallback", return_value=cot_panel):
-                res2 = generate_target(source="cache", cot=True, refresh_cot=False, targets_path=targets)
+            with patch.object(
+                live, "_build_cot_forecast_panel_with_fallback", return_value=cot_panel
+            ):
+                res2 = generate_target(
+                    source="cache", cot=True, refresh_cot=False, targets_path=targets, snapshot_dir=tmp_path / "snaps"
+                )
 
         assert res2.get("skipped") is True
         assert len(load_all_targets(targets)) == 1
@@ -96,7 +104,9 @@ class TestGenerateTarget:
     def test_generate_target_without_cot(self, tmp_path, full_prices):
         targets = tmp_path / "targets.jsonl"
         with patch.object(live, "load_prices", return_value=full_prices):
-            res = generate_target(source="cache", cot=False, refresh_cot=False, targets_path=targets)
+            res = generate_target(
+                source="cache", cot=False, refresh_cot=False, targets_path=targets, snapshot_dir=tmp_path / "snaps"
+            )
         assert res["record"]["use_cot"] is False
         assert res["record"]["cot_as_of"] is None
 
@@ -110,6 +120,7 @@ class TestGenerateTarget:
                 refresh_cot=False,
                 end=end_date,
                 targets_path=targets,
+                snapshot_dir=tmp_path / "snaps",
             )
         assert res["record"]["date"] == end_date
         assert res["record"]["as_of"] == end_date
@@ -150,12 +161,14 @@ class TestShadowBook:
 
     def test_load_live_returns(self, tmp_path):
         returns_path = tmp_path / "returns.csv"
-        pd.DataFrame({
-            "date": ["2020-01-03", "2020-01-04"],
-            "live_return": [0.001, -0.0005],
-            "mode": ["shadow", "shadow"],
-            "use_cot": [True, True],
-        }).to_csv(returns_path, index=False)
+        pd.DataFrame(
+            {
+                "date": ["2020-01-03", "2020-01-04"],
+                "live_return": [0.001, -0.0005],
+                "mode": ["shadow", "shadow"],
+                "use_cot": [True, True],
+            }
+        ).to_csv(returns_path, index=False)
         s = load_live_returns(returns_path)
         assert len(s) == 2
         assert s.index[0] == pd.Timestamp("2020-01-03")
@@ -174,16 +187,20 @@ class TestReconciliation:
         targets.write_text(json.dumps(record) + "\n")
 
         # Live returns = modeled GROSS returns (shadow has no costs) → perfect tracking.
-        live_df = pd.DataFrame({
-            "date": result.gross_returns.index.strftime("%Y-%m-%d"),
-            "live_return": result.gross_returns.values,
-            "mode": "shadow",
-            "use_cot": True,
-        })
+        live_df = pd.DataFrame(
+            {
+                "date": result.gross_returns.index.strftime("%Y-%m-%d"),
+                "live_return": result.gross_returns.values,
+                "mode": "shadow",
+                "use_cot": True,
+            }
+        )
         live_df.to_csv(returns_path, index=False)
 
         with patch.object(live, "load_prices", return_value=full_prices):
-            with patch.object(live, "_build_cot_forecast_panel_with_fallback", return_value=cot_panel):
+            with patch.object(
+                live, "_build_cot_forecast_panel_with_fallback", return_value=cot_panel
+            ):
                 res = run_reconciliation(
                     target=load_latest_target(targets),
                     source="cache",
@@ -213,17 +230,23 @@ class TestReconciliation:
 
         # Live returns uncorrelated with modeled returns → tracking error explodes.
         np.random.seed(42)
-        noise = pd.Series(np.random.normal(0, 0.01, len(result.daily_returns)), index=result.daily_returns.index)
-        live_df = pd.DataFrame({
-            "date": noise.index.strftime("%Y-%m-%d"),
-            "live_return": noise.values,
-            "mode": "shadow",
-            "use_cot": True,
-        })
+        noise = pd.Series(
+            np.random.normal(0, 0.01, len(result.daily_returns)), index=result.daily_returns.index
+        )
+        live_df = pd.DataFrame(
+            {
+                "date": noise.index.strftime("%Y-%m-%d"),
+                "live_return": noise.values,
+                "mode": "shadow",
+                "use_cot": True,
+            }
+        )
         live_df.to_csv(returns_path, index=False)
 
         with patch.object(live, "load_prices", return_value=full_prices):
-            with patch.object(live, "_build_cot_forecast_panel_with_fallback", return_value=cot_panel):
+            with patch.object(
+                live, "_build_cot_forecast_panel_with_fallback", return_value=cot_panel
+            ):
                 res = run_reconciliation(
                     target=load_latest_target(targets),
                     source="cache",
@@ -245,6 +268,7 @@ class TestAlpacaScript:
         kill_switch.write_text(json.dumps({"paused": True, "reason": "test"}))
 
         from scripts.execute_alpaca import execute_targets
+
         res = execute_targets(
             target=load_latest_target(targets),
             live=False,

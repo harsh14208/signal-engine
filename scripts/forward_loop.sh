@@ -24,6 +24,10 @@ python scripts/shadow_book.py --source auto
 # 4. Reconcile shadow returns vs the backtest and update guardrails.
 python scripts/reconcile.py --source auto
 
-# 5. Submit orders to Alpaca PAPER to match the target (reads ALPACA_SE_* creds;
+# 5. Replay stored decisions and detect engine drift (Phase 3). --enforce engages
+#    the kill switch on LOGIC drift (code-level divergence). Non-fatal to the loop.
+python scripts/detect_drift.py --source auto --enforce || true
+
+# 6. Submit orders to Alpaca PAPER to match the target (reads ALPACA_SE_* creds;
 #    respects the kill switch). Enabled 2026-06-29 for forward-test execution.
 python scripts/execute_alpaca.py --paper

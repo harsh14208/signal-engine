@@ -17,7 +17,8 @@ from signal_engine.live import (  # noqa: E402
     DEFAULT_RETURNS_PATH,
     DEFAULT_TARGETS_PATH,
     append_shadow_return,
-    load_latest_target,
+    load_all_targets,
+    load_latest_target_for_book,
 )
 
 
@@ -50,28 +51,40 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
 
-    target = load_latest_target(args.targets)
-    try:
-        res = append_shadow_return(
-            target=target,
-            source=args.source,
-            end=args.end,
-            returns_path=args.returns,
+    # Mark the latest target for every book present (champion, challenger, …).
+    books = sorted({t.get("book", "champion") for t in load_all_targets(args.targets)}) or [
+        "champion"
+    ]
+    rc = 0
+    for book in books:
+        target = load_latest_target_for_book(args.targets, book)
+        if target is None:
+            continue
+        try:
+            res = append_shadow_return(
+                target=target,
+                source=args.source,
+                end=args.end,
+                returns_path=args.returns,
+            )
+        except Exception as exc:
+            print(f"shadow_book ({book}) failed: {exc}", file=sys.stderr)
+            rc = 1
+            continue
+
+        if res.get("skipped"):
+            print(
+                f"Skipped {book}: {res.get('reason')} "
+                f"({res.get('target_date') or res.get('date')})"
+            )
+            continue
+
+        record = res["record"]
+        print(
+            f"Shadow return {record['date']} [{book}]: {record['live_return']:.4%} "
+            f"(mode={record['mode']}, use_cot={record['use_cot']})"
         )
-    except Exception as exc:
-        print(f"shadow_book failed: {exc}", file=sys.stderr)
-        return 1
-
-    if res.get("skipped"):
-        print(f"Skipped: {res.get('reason')} ({res.get('target_date') or res.get('date')})")
-        return 0
-
-    record = res["record"]
-    print(
-        f"Shadow return {record['date']}: {record['live_return']:.4%} "
-        f"(mode={record['mode']}, use_cot={record['use_cot']})"
-    )
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

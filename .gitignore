@@ -16,6 +16,9 @@ data/kill_switch.json
 data/launchd_*.log
 data/cache/
 data/experiments.jsonl
+data/feature_snapshots/
+data/friction_calibration.json
+data/equity_ref.json
 
 # Secrets — NEVER commit real credentials
 .env

@@ -45,29 +45,48 @@ def main(argv: list[str] | None = None) -> int:
         help="path to the live-targets JSONL file",
     )
     p.add_argument("--end", default=None, help="optional as-of date (YYYY-MM-DD)")
+    p.add_argument(
+        "--challenger",
+        action="store_true",
+        help="also emit a parallel 'challenger' shadow book with COT flipped, to "
+        "forward-test the COT lever without touching the champion book",
+    )
     args = p.parse_args(argv)
 
-    try:
-        res = generate_target(
-            source=args.source,
-            cot=not args.no_cot,
-            refresh_cot=not args.no_refresh_cot,
-            end=args.end,
-            targets_path=args.output,
+    def _emit(book: str, cot: bool, overrides: dict | None = None) -> int:
+        try:
+            res = generate_target(
+                source=args.source,
+                cot=cot,
+                refresh_cot=not args.no_refresh_cot,
+                end=args.end,
+                targets_path=args.output,
+                book=book,
+                overrides=overrides,
+            )
+        except Exception as exc:
+            print(f"generate_targets ({book}) failed: {exc}", file=sys.stderr)
+            return 1
+        if res.get("skipped"):
+            print(f"Target for {res['date']} ({book}) already exists; skipped.")
+            return 0
+        record = res["record"]
+        print(f"Wrote {book} target for {record['date']}: {len(record['units'])} instruments")
+        print(
+            f"  config: core 19 + governor + {record['buffer_fraction']:.0%} buffer "
+            f"+ COT={record['use_cot']}"
         )
-    except Exception as exc:
-        print(f"generate_targets failed: {exc}", file=sys.stderr)
-        return 1
-
-    if res.get("skipped"):
-        print(f"Target for {res['date']} already exists; skipped.")
+        print(
+            f"  IDM={record['idm']:.2f} FDM={record['fdm']:.2f} governor={record['governor']:.2f}"
+        )
         return 0
 
-    record = res["record"]
-    print(f"Wrote target for {record['date']}: {len(record['units'])} instruments")
-    print(f"  config: core 19 + governor + {record['buffer_fraction']:.0%} buffer + COT={record['use_cot']}")
-    print(f"  IDM={record['idm']:.2f} FDM={record['fdm']:.2f} governor={record['governor']:.2f}")
-    return 0
+    champ_cot = not args.no_cot
+    rc = _emit("champion", cot=champ_cot)
+    if args.challenger:
+        # Challenger flips the COT lever relative to the champion.
+        rc = _emit("challenger", cot=not champ_cot) or rc
+    return rc
 
 
 if __name__ == "__main__":

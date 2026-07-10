@@ -18,6 +18,8 @@ from .backtest import BacktestResult, run_backtest
 from .config import Config
 from .cot_data import build_cot_forecast_panel, build_cot_signal_panel, cot_forecast
 from .data import load_prices
+from .feature_store import DEFAULT_SNAPSHOT_DIR, save_snapshot, snapshot_from_target
+from .lineage import lineage_hash
 from .markets import instrument_for, symbols
 from .metrics import sharpe
 from .monitor import edge_decay_report, reconcile
@@ -26,13 +28,17 @@ _DATA_DIR = Path(__file__).parent.parent / "data"
 DEFAULT_TARGETS_PATH = _DATA_DIR / "live_targets.jsonl"
 
 
-def _slice_prices(prices: pd.DataFrame, start: str | None = None, end: str | None = None) -> pd.DataFrame:
+def _slice_prices(
+    prices: pd.DataFrame, start: str | None = None, end: str | None = None
+) -> pd.DataFrame:
     """Honour start/end even when the loader (e.g., cache) returned a wider panel."""
     if start is not None:
         prices = prices.loc[prices.index >= pd.Timestamp(start)]
     if end is not None:
         prices = prices.loc[prices.index <= pd.Timestamp(end)]
     return prices
+
+
 DEFAULT_RETURNS_PATH = _DATA_DIR / "live_returns.csv"
 DEFAULT_RECON_DIR = _DATA_DIR / "reconciliation"
 DEFAULT_KILL_SWITCH_PATH = _DATA_DIR / "kill_switch.json"
@@ -109,6 +115,20 @@ def load_all_targets(path: Path | str = DEFAULT_TARGETS_PATH) -> list[dict[str, 
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+def load_latest_target_for_book(
+    path: Path | str = DEFAULT_TARGETS_PATH, book: str = "champion"
+) -> dict[str, Any] | None:
+    """Most recent target record for a given shadow book.
+
+    Records written before the champion/challenger split have no `book` field and
+    are treated as the champion, so this stays backward-compatible.
+    """
+    for rec in reversed(load_all_targets(path)):
+        if rec.get("book", "champion") == book:
+            return rec
+    return None
+
+
 def _clean_series_dict(d: dict[str, Any]) -> dict[str, Any]:
     """Serialize a Series-like dict, converting NaN/inf to None or float."""
     out: dict[str, Any] = {}
@@ -135,8 +155,15 @@ def build_target_record(
     cfg: Config,
     cot: pd.DataFrame | None = None,
     as_of: str | None = None,
+    book: str = "champion",
 ) -> dict[str, Any]:
-    """Build a date-stamped target record from the latest backtest row."""
+    """Build a date-stamped target record from the latest backtest row.
+
+    `book` labels which shadow book this target belongs to ("champion" for the
+    live default; a second label like "challenger" for a candidate config run in
+    parallel), so realised returns can later be partitioned and the challenger
+    promoted only on accrued forward evidence.
+    """
     target_date = result.daily_returns.index[-1].strftime("%Y-%m-%d")
     units = _clean_series_dict(result.buffered.iloc[-1].to_dict())
     notional = _clean_series_dict(result.notional.iloc[-1].to_dict())
@@ -144,6 +171,7 @@ def build_target_record(
     return {
         "date": target_date,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "book": book,
         "capital": float(cfg.capital),
         "vol_target": float(cfg.vol_target),
         "buffer_fraction": float(cfg.buffer_fraction),
@@ -157,6 +185,7 @@ def build_target_record(
         "notional": notional,
         "forecast": forecast,
         "as_of": as_of or target_date,
+        "lineage_hash": lineage_hash(),
     }
 
 
@@ -166,15 +195,23 @@ def generate_target(
     refresh_cot: bool = True,
     end: str | None = None,
     targets_path: Path | str = DEFAULT_TARGETS_PATH,
+    book: str = "champion",
+    overrides: dict[str, Any] | None = None,
+    snapshot: bool = True,
+    snapshot_dir: Path | str = DEFAULT_SNAPSHOT_DIR,
 ) -> dict[str, Any]:
     """Refresh prices, run the validated config, and append a target record.
 
-    Idempotent: skips if a record for the latest price date already exists.
+    Idempotent per (date, book): skips if a record for the latest price date and
+    the same book already exists.  Pass `book="challenger"` with `overrides`
+    (e.g. ``{"use_cot": False}``) to run a candidate config as a parallel shadow
+    book alongside the champion.  When `snapshot` is set, an immutable point-in-time
+    feature snapshot of the decision inputs is persisted for replay (Phase 3).
     """
     targets_path = Path(targets_path)
     targets_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cfg = validated_config(cot=cot)
+    cfg = validated_config(cot=cot, **(overrides or {}))
     syms = symbols(expanded=False)
     end = end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     prices = load_prices(syms, start="2007-01-01", end=end, source=source, cache_tag="universe")
@@ -190,14 +227,21 @@ def generate_target(
         else None
     )
     result = run_backtest(prices, cfg, cot=cot_panel)
-    record = build_target_record(result, cfg, cot=cot_panel, as_of=prices.index[-1].strftime("%Y-%m-%d"))
+    record = build_target_record(
+        result, cfg, cot=cot_panel, as_of=prices.index[-1].strftime("%Y-%m-%d"), book=book
+    )
 
-    latest = load_latest_target(targets_path)
+    latest = load_latest_target_for_book(targets_path, book)
     if latest is not None and latest.get("date") == record["date"]:
-        return {"skipped": True, "date": record["date"], "path": str(targets_path)}
+        return {"skipped": True, "date": record["date"], "book": book, "path": str(targets_path)}
 
     with open(targets_path, "a") as f:
         f.write(json.dumps(record) + "\n")
+    if snapshot:
+        save_snapshot(
+            record["date"], snapshot_from_target(record, prices), book=book,
+            snapshot_dir=snapshot_dir,
+        )
     return {"record": record, "path": str(targets_path)}
 
 
@@ -232,34 +276,81 @@ def compute_shadow_return(
     return mark_date, live_return
 
 
+def compute_delay_slippage(
+    target: dict[str, Any],
+    prices: pd.DataFrame,
+    arrival_prices: pd.DataFrame,
+) -> float | None:
+    """Overnight 'delay cost': target-date close → the price you actually enter at.
+
+    The shadow book decides units at the target-date close but can only transact
+    at the next session's arrival price (e.g. the open). The gap between the two
+    is delay cost — the executable-vs-decision slippage TCA calls out. Supplying
+    an arrival-price panel (opens) makes it measurable without corrupting the
+    close-to-close series that stays comparable to the backtest.
+    """
+    target_date = pd.Timestamp(target["date"])
+    if target_date not in prices.index:
+        return None
+    future = prices.index[prices.index > target_date]
+    if len(future) == 0 or future[0] not in arrival_prices.index:
+        return None
+    mark_date = future[0]
+    syms = [s for s in target["units"] if s in prices.columns and s in arrival_prices.columns]
+    if not syms:
+        return None
+    units = pd.Series({s: (target["units"].get(s) or 0.0) for s in syms})
+    mult = pd.Series({s: multipliers_for([s])[s] for s in syms})
+    gap = arrival_prices.loc[mark_date, syms] - prices.loc[target_date, syms]
+    pnl = (units * gap * mult).sum()
+    capital = target.get("capital", 1_000_000.0)
+    return float(pnl / capital) if capital else 0.0
+
+
 def append_shadow_return(
     target: dict[str, Any] | None,
     source: str = "auto",
     end: str | None = None,
     returns_path: Path | str = DEFAULT_RETURNS_PATH,
     prices: pd.DataFrame | None = None,
+    arrival_prices: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Mark the next-day return for the latest target and append to live returns."""
     returns_path = Path(returns_path)
     returns_path.parent.mkdir(parents=True, exist_ok=True)
     if target is None:
         return {"skipped": True, "reason": "no_target"}
+    book = target.get("book", "champion")
 
     if prices is None:
         syms = [s for s in target["units"] if s]
         end = end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        prices = load_prices(syms, start=target["date"], end=end, source=source, cache_tag="universe")
+        prices = load_prices(
+            syms, start=target["date"], end=end, source=source, cache_tag="universe"
+        )
         prices = _slice_prices(prices, start=target["date"], end=end)
 
     computed = compute_shadow_return(target, prices)
     if computed is None:
         return {"skipped": True, "reason": "no_next_day_price", "target_date": target["date"]}
     mark_date, live_return = computed
+    delay_return = (
+        compute_delay_slippage(target, prices, arrival_prices)
+        if arrival_prices is not None
+        else None
+    )
 
-    if returns_path.exists():
-        existing = pd.read_csv(returns_path, parse_dates=["date"])
-        if mark_date in existing["date"].values:
-            return {"skipped": True, "reason": "already_recorded", "date": mark_date.strftime("%Y-%m-%d")}
+    existing = pd.read_csv(returns_path, parse_dates=["date"]) if returns_path.exists() else None
+    if existing is not None and len(existing):
+        book_col = existing["book"] if "book" in existing.columns else "champion"
+        dup = ((existing["date"] == mark_date) & (book_col == book)).any()
+        if dup:
+            return {
+                "skipped": True,
+                "reason": "already_recorded",
+                "date": mark_date.strftime("%Y-%m-%d"),
+                "book": book,
+            }
 
     row = {
         "date": mark_date.strftime("%Y-%m-%d"),
@@ -267,12 +358,16 @@ def append_shadow_return(
         "live_return": live_return,
         "mode": "shadow",
         "use_cot": target.get("use_cot"),
+        "book": book,
+        "delay_return": delay_return,
     }
-    df = pd.DataFrame([row])
-    if returns_path.exists():
-        df.to_csv(returns_path, mode="a", header=False, index=False)
-    else:
-        df.to_csv(returns_path, index=False)
+    # Full rewrite (read+concat+write) keeps the schema consistent as columns
+    # evolve — safer than a headerless append when new fields (book, delay) appear.
+    combined = pd.DataFrame([row]) if existing is None else pd.concat(
+        [existing.assign(date=existing["date"].dt.strftime("%Y-%m-%d")), pd.DataFrame([row])],
+        ignore_index=True,
+    )
+    combined.to_csv(returns_path, index=False)
     return {"record": row, "path": str(returns_path)}
 
 
@@ -314,6 +409,62 @@ def load_live_return_modes(path: Path | str = DEFAULT_RETURNS_PATH) -> pd.Series
     if "mode" not in df.columns:
         return pd.Series("shadow", index=df["date"], name="mode").sort_index()
     return df.set_index("date")["mode"].sort_index()
+
+
+def _book_label(df: pd.DataFrame) -> pd.Series:
+    """Per-row book label, deriving one from `use_cot` for legacy rows.
+
+    Old rows predate the champion/challenger split (FORWARD.md's manual use_cot
+    partition): use_cot=True → "cot_challenger", else "champion".
+    """
+    if "book" in df.columns and df["book"].notna().any():
+        return df["book"].fillna("champion")
+    if "use_cot" in df.columns:
+        return df["use_cot"].map(lambda v: "cot_challenger" if v in (True, "True", "true") else "champion")
+    return pd.Series("champion", index=df.index)
+
+
+def champion_challenger_report(
+    path: Path | str = DEFAULT_RETURNS_PATH, min_days: int = 60, promote_margin: float = 0.20
+) -> dict[str, Any]:
+    """Compare shadow books by their realised forward Sharpe, and recommend a promotion.
+
+    Splits `live_returns` by book (falling back to the use_cot partition for legacy
+    rows), reports per-book n/Sharpe, and only recommends promoting a challenger
+    once it has ≥ `min_days` of forward data *and* beats the champion's Sharpe by
+    at least `promote_margin`. This is the disciplined "promote on forward evidence,
+    not backtest" gate FORWARD.md calls for.
+    """
+    path = Path(path)
+    if not path.exists():
+        return {"insufficient": True, "reason": "no_returns"}
+    df = pd.read_csv(path, parse_dates=["date"])
+    if df.empty:
+        return {"insufficient": True, "reason": "empty"}
+    df = df.assign(book=_book_label(df).values)
+
+    books: dict[str, dict[str, Any]] = {}
+    for name, grp in df.groupby("book"):
+        r = grp.set_index("date")["live_return"].sort_index()
+        books[str(name)] = {
+            "n": int(len(r)),
+            "sharpe": float(sharpe(r)) if len(r) > 1 else None,
+            "mean_daily": float(r.mean()) if len(r) else None,
+        }
+
+    champ = books.get("champion")
+    recommendation = "hold"
+    best_challenger = None
+    if champ and champ["sharpe"] is not None:
+        for name, stats in books.items():
+            if name == "champion" or stats["sharpe"] is None or stats["n"] < min_days:
+                continue
+            if stats["sharpe"] >= champ["sharpe"] + promote_margin:
+                if best_challenger is None or stats["sharpe"] > books[best_challenger]["sharpe"]:
+                    best_challenger = name
+        if best_challenger is not None:
+            recommendation = f"promote:{best_challenger}"
+    return {"books": books, "recommendation": recommendation, "min_days": min_days}
 
 
 def run_reconciliation(

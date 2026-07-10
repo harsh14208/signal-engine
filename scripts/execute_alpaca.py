@@ -115,7 +115,11 @@ def get_account(base: str, key: str, secret: str) -> dict[str, Any]:
 
 
 def gross_scale_factor(
-    target: dict[str, Any], equity: float, max_gross_mult: float
+    target: dict[str, Any],
+    equity: float,
+    max_gross_mult: float,
+    equity_buffer: float = 0.0,
+    reference_equity: float | None = None,
 ) -> float:
     """Factor to scale target units so gross notional <= max_gross_mult * equity.
 
@@ -124,6 +128,15 @@ def gross_scale_factor(
     that blows the long leg through the limit, so we down-scale the whole book — keeping
     its long/short shape — to fit a gross-exposure budget. Returns 1.0 (no scaling) when
     the book already fits or when we can't compute a budget.
+
+    Capital-buffer stabilisation (Fan/Zhang gross-exposure work): a raw budget of
+    ``max_gross_mult * live_equity`` whipsaws — it *vanishes* when equity dips and
+    *over-upsizes* when equity spikes, churning the book on noise. Two dampers:
+      • ``equity_buffer`` reserves a fraction of equity (budget uses the remaining
+        ``1 - equity_buffer``), leaving margin headroom.
+      • ``reference_equity`` (e.g. a trailing/smoothed equity the caller persists)
+        anchors the budget to the *lower* of live and reference equity, so a
+        one-day spike can't upsize the book. Defaults to live equity (no damping).
     """
     if equity <= 0 or max_gross_mult <= 0:
         return 1.0
@@ -131,7 +144,8 @@ def gross_scale_factor(
     gross = sum(abs(float(v)) for v in notional.values() if v is not None)
     if gross <= 0:
         return 1.0
-    budget = max_gross_mult * equity
+    anchor = equity if reference_equity is None else min(equity, float(reference_equity))
+    budget = max_gross_mult * anchor * (1.0 - max(0.0, min(equity_buffer, 0.95)))
     return min(1.0, budget / gross)
 
 
@@ -180,6 +194,28 @@ def is_shortable(base: str, key: str, secret: str, symbol: str) -> bool:
     return _shortable_cache[sym]
 
 
+def _update_reference_equity(
+    equity: float, path: Path, halflife_days: float
+) -> float | None:
+    """Maintain an EW-smoothed reference equity across runs (persisted to `path`).
+
+    Returns the updated reference, or None when smoothing is disabled
+    (halflife_days <= 0), in which case the gross cap uses live equity directly.
+    """
+    if halflife_days <= 0 or equity <= 0:
+        return None
+    prev = None
+    if path.exists():
+        try:
+            prev = float(json.loads(path.read_text()).get("ref"))
+        except Exception:
+            prev = None
+    alpha = 1.0 - 0.5 ** (1.0 / halflife_days)
+    ref = equity if prev is None else prev + alpha * (equity - prev)
+    path.write_text(json.dumps({"ref": ref, "last_equity": equity}))
+    return ref
+
+
 def execute_targets(
     target: dict[str, Any],
     live: bool = False,
@@ -188,6 +224,9 @@ def execute_targets(
     kill_switch: dict[str, Any] | None = None,
     cancel_open: bool = True,
     max_gross_mult: float = 1.5,
+    equity_buffer: float = 0.0,
+    equity_ref_halflife: float = 0.0,
+    equity_ref_path: Path | str = repo_root / "data" / "equity_ref.json",
 ) -> dict[str, Any]:
     orders_path = Path(orders_path)
     orders_path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,7 +247,10 @@ def execute_targets(
     # leg doesn't blow through the paper account's buying power. Anchored to live equity.
     account = get_account(base, key, secret)
     equity = float(account.get("equity") or account.get("portfolio_value") or 0.0)
-    scale = gross_scale_factor(target, equity, max_gross_mult)
+    ref_equity = _update_reference_equity(equity, Path(equity_ref_path), equity_ref_halflife)
+    scale = gross_scale_factor(
+        target, equity, max_gross_mult, equity_buffer=equity_buffer, reference_equity=ref_equity
+    )
 
     positions = get_positions(base, key, secret)
     current: dict[str, float] = {}
@@ -300,6 +342,23 @@ def main(argv: list[str] | None = None) -> int:
         help="cap gross exposure (|long|+|short| notional) at this multiple of account "
         "equity; the book is down-scaled to fit. Default 1.5x.",
     )
+    p.add_argument(
+        "--equity-buffer",
+        type=float,
+        default=0.0,
+        dest="equity_buffer",
+        help="reserve this fraction of equity out of the gross budget (margin headroom). "
+        "Default 0.0.",
+    )
+    p.add_argument(
+        "--equity-ref-halflife",
+        type=float,
+        default=0.0,
+        dest="equity_ref_halflife",
+        help="EW half-life (days) for a smoothed reference equity that anchors the gross "
+        "cap to the lower of live/reference equity, damping spike-driven upsizing. "
+        "0 disables (use live equity). Default 0.",
+    )
     args = p.parse_args(argv)
 
     target = load_latest_target(args.targets)
@@ -320,6 +379,8 @@ def main(argv: list[str] | None = None) -> int:
             orders_path=args.orders_output,
             kill_switch=kill,
             max_gross_mult=args.max_gross_mult,
+            equity_buffer=args.equity_buffer,
+            equity_ref_halflife=args.equity_ref_halflife,
         )
     except Exception as exc:
         print(f"execute_alpaca failed: {exc}", file=sys.stderr)
