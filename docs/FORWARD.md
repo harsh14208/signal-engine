@@ -139,6 +139,18 @@ Then run:
 python scripts/execute_alpaca.py --paper
 ```
 
+### Gross-exposure cap
+
+The book is a leveraged long/short basket: IDM × FDM scale gross notional
+(`|long| + |short|`) to ~3.6× capital. On a paper account with finite buying
+power the raw long leg alone (~2.5× capital) blows through the limit, so the
+executor **down-scales the whole book to a gross budget** before submitting.
+
+`--max-gross-mult` (default **1.5**) caps gross at that multiple of the account's
+live equity, preserving the long/short shape. Example: a $3.7M target book on a
+$1M account scales to ~40% so gross lands at $1.5M. Each order record carries the
+applied `gross_scale`. Raise the multiple only if the account can margin it.
+
 For live trading, use `alpaca_live_api_key` / `alpaca_live_api_secret` and pass
 `--live`. Do not enable live until the shadow book has tracked the backtest for
 an extended period.

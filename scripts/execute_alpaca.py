@@ -110,6 +110,31 @@ def get_positions(base: str, key: str, secret: str) -> list[dict[str, Any]]:
     return _request(base, POSITIONS_PATH, key, secret, method="GET")
 
 
+def get_account(base: str, key: str, secret: str) -> dict[str, Any]:
+    return _request(base, "/v2/account", key, secret, method="GET")
+
+
+def gross_scale_factor(
+    target: dict[str, Any], equity: float, max_gross_mult: float
+) -> float:
+    """Factor to scale target units so gross notional <= max_gross_mult * equity.
+
+    The book is a leveraged long/short basket whose gross notional (|long| + |short|)
+    naturally runs several times capital. On a paper account with finite buying power
+    that blows the long leg through the limit, so we down-scale the whole book — keeping
+    its long/short shape — to fit a gross-exposure budget. Returns 1.0 (no scaling) when
+    the book already fits or when we can't compute a budget.
+    """
+    if equity <= 0 or max_gross_mult <= 0:
+        return 1.0
+    notional = target.get("notional") or {}
+    gross = sum(abs(float(v)) for v in notional.values() if v is not None)
+    if gross <= 0:
+        return 1.0
+    budget = max_gross_mult * equity
+    return min(1.0, budget / gross)
+
+
 def place_qty_order(
     base: str,
     key: str,
@@ -162,6 +187,7 @@ def execute_targets(
     orders_path: Path | str = repo_root / "data" / "broker_orders.jsonl",
     kill_switch: dict[str, Any] | None = None,
     cancel_open: bool = True,
+    max_gross_mult: float = 1.5,
 ) -> dict[str, Any]:
     orders_path = Path(orders_path)
     orders_path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,6 +203,13 @@ def execute_targets(
     # (otherwise an after-close re-run double-submits the orders waiting at the open).
     if cancel_open:
         cancel_all_orders(base, key, secret)
+
+    # Down-scale the (leveraged long/short) book to a gross-exposure budget so the long
+    # leg doesn't blow through the paper account's buying power. Anchored to live equity.
+    account = get_account(base, key, secret)
+    equity = float(account.get("equity") or account.get("portfolio_value") or 0.0)
+    scale = gross_scale_factor(target, equity, max_gross_mult)
+
     positions = get_positions(base, key, secret)
     current: dict[str, float] = {}
     for pos in positions:
@@ -185,7 +218,9 @@ def execute_targets(
 
     # Target units are share counts (ETF multiplier = 1) → trade WHOLE shares.
     target_shares = {
-        k.upper(): round(float(v)) for k, v in target.get("units", {}).items() if v is not None
+        k.upper(): round(float(v) * scale)
+        for k, v in target.get("units", {}).items()
+        if v is not None
     }
     all_syms = sorted(set(target_shares) | set(current))
     submitted: list[dict[str, Any]] = []
@@ -194,6 +229,13 @@ def execute_targets(
     for sym in all_syms:
         tgt = target_shares.get(sym, 0)
         cur = round(current.get(sym, 0.0))
+        # Never cross zero in a single order: Alpaca rejects (403 insufficient_qty)
+        # a sell that runs a long through flat into a short (or the mirror). Close to
+        # flat this run; the reverse leg is opened from flat on the next run. The
+        # daily loop converges the flip in one extra day.
+        zero_cross_deferred = cur * tgt < 0
+        if zero_cross_deferred:
+            tgt = 0
         delta = tgt - cur
         if abs(delta) < min_shares:
             continue
@@ -216,13 +258,15 @@ def execute_targets(
             "delta_shares": delta,
             "side": side,
             "live": live,
+            "gross_scale": round(scale, 4),
+            "zero_cross_deferred": zero_cross_deferred,
             "response": resp,
         }
         submitted.append(record)
         with open(orders_path, "a") as f:
             f.write(json.dumps(record, default=str) + "\n")
 
-    return {"submitted": submitted, "skipped": False}
+    return {"submitted": submitted, "skipped": False, "gross_scale": scale, "equity": equity}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -248,6 +292,14 @@ def main(argv: list[str] | None = None) -> int:
         default=repo_root / "data" / "broker_orders.jsonl",
     )
     p.add_argument("--kill-switch", type=Path, default=DEFAULT_KILL_SWITCH_PATH)
+    p.add_argument(
+        "--max-gross-mult",
+        type=float,
+        default=1.5,
+        dest="max_gross_mult",
+        help="cap gross exposure (|long|+|short| notional) at this multiple of account "
+        "equity; the book is down-scaled to fit. Default 1.5x.",
+    )
     args = p.parse_args(argv)
 
     target = load_latest_target(args.targets)
@@ -267,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             min_shares=args.min_shares,
             orders_path=args.orders_output,
             kill_switch=kill,
+            max_gross_mult=args.max_gross_mult,
         )
     except Exception as exc:
         print(f"execute_alpaca failed: {exc}", file=sys.stderr)
@@ -284,6 +337,13 @@ def main(argv: list[str] | None = None) -> int:
     accepted = [r for r in subs if _resp(r).get("id")]
     skipped = [r for r in subs if _resp(r).get("skipped")]
     rejected = [r for r in subs if not _resp(r).get("id") and not _resp(r).get("skipped")]
+    scale = res.get("gross_scale", 1.0)
+    equity = res.get("equity", 0.0)
+    if scale < 1.0:
+        print(
+            f"Gross cap: book scaled to {scale:.1%} of target "
+            f"(≤{args.max_gross_mult:g}x equity ${equity:,.0f})."
+        )
     print(
         f"{len(accepted)}/{len(subs)} orders ACCEPTED "
         f"({'LIVE' if args.live else 'PAPER'}); {len(skipped)} skipped (non-shortable)."
@@ -291,7 +351,11 @@ def main(argv: list[str] | None = None) -> int:
     for rec in subs:
         resp = _resp(rec)
         flag = "ok " if resp.get("id") else ("skip" if resp.get("skipped") else "ERR")
-        print(f"  [{flag}] {rec['symbol']:6s} {rec['side']:4s} {abs(rec['delta_shares'])} sh")
+        flip = " (flip→flat; reverses next run)" if rec.get("zero_cross_deferred") else ""
+        print(f"  [{flag}] {rec['symbol']:6s} {rec['side']:4s} {abs(rec['delta_shares'])} sh{flip}")
+    deferred = [r for r in subs if r.get("zero_cross_deferred")]
+    if deferred:
+        print(f"  ↺ {len(deferred)} flip(s) closed to flat; reverse leg opens on the next run.")
     if rejected:
         print(f"  ⚠ {len(rejected)} rejected — first: {str(rejected[0]['response'])[:140]}")
     return len(rejected) > 0
