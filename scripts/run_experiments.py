@@ -35,8 +35,11 @@ from signal_engine.metrics import (
 )
 from signal_engine.validation import (
     block_bootstrap_sharpe,
+    honest_n_trials,
     lo_sharpe_ci,
     placebo_sharpes,
+    probability_backtest_overfitting,
+    register_trial,
 )
 
 
@@ -51,7 +54,7 @@ def _is_oos_sharpe(daily: pd.Series, frac: float = 0.7) -> tuple[float, float]:
     return sharpe(daily.iloc[:split]), sharpe(daily.iloc[split:])
 
 
-def _run_one(name: str, cfg: Config) -> dict:
+def _run_one(name: str, cfg: Config, n_trials: int) -> tuple[dict, pd.Series]:
     expanded = cfg.use_expanded_universe
     syms = symbols(expanded=expanded)
     cache_tag = "expanded" if expanded else "universe"
@@ -126,7 +129,7 @@ def _run_one(name: str, cfg: Config) -> dict:
         n_instruments=result.per_instrument_returns.shape[1],
         n_days=n_days,
     )
-    lo = lo_sharpe_ci(daily, n_trials=100)
+    lo = lo_sharpe_ci(daily, n_trials=n_trials)
     bb = block_bootstrap_sharpe(daily)
 
     mean_standalone = _mean_standalone_sharpe(result)
@@ -136,7 +139,7 @@ def _run_one(name: str, cfg: Config) -> dict:
         else float("nan")
     )
 
-    return {
+    row = {
         "run": name,
         "net_sr": port_sr,
         "is_sr": is_sr,
@@ -149,9 +152,11 @@ def _run_one(name: str, cfg: Config) -> dict:
         "fdm": result.fdm,
         "placebo_95": pl["noise_floor_95"],
         "deflated_max": lo.get("deflated_expected_max", float("nan")),
+        "passes_deflated": bool(lo.get("passes_deflated", False)),
         "bb_p5": bb.get("p5", float("nan")),
         "div_ratio": div_ratio,
     }
+    return row, daily
 
 
 def main() -> None:
@@ -205,12 +210,32 @@ def main() -> None:
         ),
     ]
 
+    # Register every config FIRST so the honest trial count reflects the whole
+    # search before any deflation is computed (dedup by fingerprint → idempotent).
+    for name, cfg in runs:
+        register_trial(cfg, label=name)
+    # Floor at a conservative prior: the registry only captures configs registered
+    # since it was added, so it *undercounts* the project's true search history. The
+    # registry may raise the bar above the floor, never lower it below it.
+    _TRIAL_FLOOR = 100
+    registry_count = honest_n_trials()
+    n_trials = max(registry_count, _TRIAL_FLOOR)
+    print(f"Trial count: registry={registry_count}, floored → n_trials={n_trials}")
+
     rows = []
+    dailies: dict[str, pd.Series] = {}
     for name, cfg in runs:
         print(f"Running {name}...")
-        rows.append(_run_one(name, cfg))
+        row, daily = _run_one(name, cfg, n_trials)
+        rows.append(row)
+        dailies[name] = daily.reset_index(drop=True)
 
     df = pd.DataFrame(rows)
+
+    # Probability of Backtest Overfitting across the whole config search: did the
+    # in-sample-best config land below the OOS median more often than chance?
+    returns_matrix = pd.DataFrame(dailies).dropna()
+    pbo = probability_backtest_overfitting(returns_matrix)
 
     # Markdown table.
     lines = [
@@ -218,7 +243,9 @@ def main() -> None:
         "",
         f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC",
         "Data: real ETF-proxy prices (cache), 2007–2026.",
-        "Validation: 70/30 chronological OOS, random-walk placebo (n=12), Lo CI (n_trials=100), block-bootstrap.",
+        f"Validation: 70/30 chronological OOS, random-walk placebo (n=12), "
+        f"Deflated Sharpe at the **honest** trial count (n_trials={n_trials}, from the "
+        f"registry — not a hardcoded 100), block-bootstrap, and PBO across the search.",
         "",
         "## Summary table",
         "",
@@ -273,6 +300,35 @@ def main() -> None:
         "- None of the individual additive levers is promoted to default on its own; each either "
         "fails to improve OOS, widens the IS/OOS gap, or raises turnover beyond the benefit."
     )
+
+    # ── Honesty section: deflation at the true trial count + PBO ──────────────
+    lines += ["", "## Honesty — overfitting at the real trial count", ""]
+    lines.append(
+        f"- Deflated-Sharpe bar uses n_trials={n_trials} = max(registry={registry_count}, "
+        f"floor=100). The registry undercounts historical search, so a conservative floor "
+        f"holds the bar up; it rises as the registry grows. Deflated-max ≈ "
+        f"{df['deflated_max'].iloc[0]:.2f}."
+    )
+    failed = df[~df["passes_deflated"]]["run"].tolist()
+    if failed:
+        lines.append(
+            f"- ⚠ Runs that do **not** clear Deflated Sharpe at n_trials={n_trials}: "
+            f"{', '.join(failed)}. A thin margin here is the parent engine's failure mode."
+        )
+    else:
+        lines.append(
+            f"- ✅ All runs clear Deflated Sharpe at n_trials={n_trials} "
+            f"(margin shrinks as the registry grows — re-check after each research batch)."
+        )
+    if pbo.get("insufficient"):
+        lines.append(f"- PBO: insufficient data ({pbo}).")
+    else:
+        verdict = "healthy" if pbo["pbo"] < 0.5 else "⚠ OVERFIT"
+        lines.append(
+            f"- Probability of Backtest Overfitting (CSCV over {pbo['n_configs']} configs): "
+            f"**{pbo['pbo']:.2f}** ({verdict}). >0.5 means the IS-best config is below the OOS "
+            f"median more often than chance."
+        )
 
     out_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "experiment_results.md")
     with open(out_path, "w", encoding="utf-8") as f:
