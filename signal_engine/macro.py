@@ -287,6 +287,12 @@ def hmm_regime_overlay(
     The state with the lower VIX mean is labelled "bull"; the other "bear".
     The posterior at the end of each window is mapped to a multiplier and held
     forward for `refit_stride` days, so there is no lookahead.
+
+    Lookahead audit (2026-07): the classic HMM trap is scoring the book with the
+    *smoothed* posterior of the whole series, which peeks at the future. Here we
+    take only ``post[-1]`` — the posterior at the window edge, where the smoothed
+    and filtered estimates coincide — and apply it strictly forward. Causal by
+    construction; see `validation.assert_no_lookahead` for the regression guard.
     """
     if not _HMM_AVAILABLE:
         return pd.Series(1.0, index=prices.index)

@@ -33,6 +33,7 @@ from .rules import (
     acceleration_forecast,
     carry_forecast,
     cross_sectional_momentum_forecast,
+    network_momentum_forecast,
     trend_forecasts,
 )
 from .scalars import _dynamic_scalar
@@ -72,6 +73,15 @@ def _cost_per_symbol(symbols: list[str], config: Config) -> pd.Series:
     if config.cost_scheme == "instrument":
         mapping = cost_per_symbol(config.use_expanded_universe)
         return pd.Series({s: mapping.get(s, config.cost_bps) for s in symbols})
+    if config.cost_scheme == "calibrated":
+        # Empirical per-side costs measured from real broker fills (friction.py).
+        # Falls back to the flat assumption for any symbol not yet calibrated.
+        from .friction import load_calibration
+
+        cal = load_calibration(config.calibration_path or None)
+        per_side = cal.get("per_side_bps", {}) if cal else {}
+        default = float(cal.get("default_bps", config.cost_bps)) if cal else config.cost_bps
+        return pd.Series({s: float(per_side.get(s, default)) for s in symbols})
     return pd.Series({s: float(config.cost_bps) for s in symbols})
 
 
@@ -173,6 +183,20 @@ def _build_forecasts(
         for sym in symbols:
             if sym in xsmom.columns:
                 per_inst[sym]["xsmom"] = xsmom[sym]
+
+    if config.use_network_momentum:
+        netmom = network_momentum_forecast(
+            prices,
+            returns,
+            speed=config.nm_speed,
+            lookback=config.nm_lookback,
+            lag=config.nm_lag,
+            rebal=config.nm_rebal,
+            top_k=config.nm_top_k,
+        )
+        for sym in symbols:
+            if sym in netmom.columns:
+                per_inst[sym]["network_mom"] = netmom[sym]
 
     return per_inst, annual_vol
 

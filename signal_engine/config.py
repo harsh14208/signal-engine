@@ -112,7 +112,10 @@ class Config:
     credit_max_gear: float = 1.25
     credit_max_degear: float = 0.50
     cost_bps: float = DEFAULT_COST_BPS
-    cost_scheme: str = "flat"  # "flat" uses cost_bps; "instrument" uses per-Instrument costs
+    # "flat" uses cost_bps; "instrument" uses per-Instrument costs; "calibrated"
+    # reads measured per-side costs from the friction calibration file.
+    cost_scheme: str = "flat"
+    calibration_path: str | None = None  # override friction.DEFAULT_CALIBRATION_PATH
     buffer_fraction: float = BUFFER_FRACTION
     fdm_cap: float = FDM_CAP
     idm_cap: float = IDM_CAP
@@ -143,6 +146,13 @@ class Config:
     accel_speeds: tuple[tuple[int, int], ...] = ((8, 32), (16, 64))
     use_xsmom: bool = False
     xsmom_lookback: int = 64
+    # Network ("follow the leader") momentum — price-only lead-lag graph signal.
+    use_network_momentum: bool = False
+    nm_speed: tuple[int, int] = (32, 128)
+    nm_lookback: int = 256
+    nm_lag: int = 1
+    nm_rebal: int = 63
+    nm_top_k: int = 3
     # Correlation-spike de-risking overlay.
     use_corr_spike: bool = False
     corr_spike_span: int = 60
@@ -175,6 +185,8 @@ class Config:
             rules += ["ACCEL"]
         if self.use_xsmom:
             rules += ["XSMOM"]
+        if self.use_network_momentum:
+            rules += ["NETMOM"]
         if self.use_cot:
             rules += ["COT"]
         weight = self.weight_scheme

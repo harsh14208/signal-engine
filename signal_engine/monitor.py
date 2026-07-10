@@ -14,6 +14,7 @@ can run BEFORE any broker:
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from .config import ANNUAL_VOL_SQRT, BUSINESS_DAYS_YEAR
@@ -31,20 +32,38 @@ def edge_decay_report(
     daily: pd.Series, window: int = BUSINESS_DAYS_YEAR, alarm_floor: float = 0.0
 ) -> dict:
     """Summarise the rolling-Sharpe path and raise an alarm if the latest dips
-    below `alarm_floor` — a cheap, honest 'is the edge still alive' monitor."""
+    below `alarm_floor` — a cheap, honest 'is the edge still alive' monitor.
+
+    Two alarms, either fires:
+      • `alarm_floor` — the crude absolute floor (default: rolling Sharpe < 0).
+      • `worst_quartile` — the latest rolling Sharpe sits in the worst quartile of
+        its own history. This self-calibrating flag (arXiv 2604.18821) catches a
+        *decaying* edge earlier than the absolute floor, and adapts to a strategy
+        whose healthy Sharpe was never far above zero to begin with.
+    """
     rs = rolling_sharpe(daily, window).dropna()
     if rs.empty:
         return {"insufficient": True}
     current = float(rs.iloc[-1])
+    floor_alarm = current < alarm_floor
+    # Quartile flag needs enough rolling points to be meaningful; gate it so it
+    # doesn't fire spuriously on a handful of early windows.
+    q25 = float(rs.quantile(0.25)) if len(rs) >= 60 else None
+    worst_quartile = bool(q25 is not None and current <= q25)
     return {
         "window": window,
         "current": current,
         "median": float(rs.median()),
         "min": float(rs.min()),
         "max": float(rs.max()),
+        "q25": q25,
         "pct_windows_below_zero": float((rs < 0).mean()),
         "alarm_floor": alarm_floor,
-        "alarm": current < alarm_floor,
+        # `alarm` keeps its original absolute-floor meaning (drives the kill switch);
+        # `worst_quartile` is a softer, self-calibrating early-warning for reports.
+        "alarm": floor_alarm,
+        "worst_quartile": worst_quartile,
+        "decay_warning": bool(floor_alarm or worst_quartile),
     }
 
 
@@ -61,10 +80,46 @@ def reconcile(live_returns: pd.Series, backtest_returns: pd.Series) -> dict:
     corr = float(df["live"].corr(df["bt"]))
     tracking_error = float(diff.std() * ANNUAL_VOL_SQRT)  # annualised
     drift = float(diff.mean() * BUSINESS_DAYS_YEAR)  # annualised mean slippage
-    return {
+    out = {
         "n": int(len(df)),
         "corr": corr,
         "tracking_error": tracking_error,
         "drift": drift,
         "aligned": corr > 0.80 and tracking_error < 0.05,
+    }
+    out["drift_decomposition"] = decompose_drift(df["live"], df["bt"])
+    return out
+
+
+def decompose_drift(live_returns: pd.Series, backtest_returns: pd.Series) -> dict:
+    """Attribute the live-vs-model drift into execution-quality components.
+
+    A single `drift` number conflates several causes. Following the spirit of
+    implementation-shortfall analysis (Perold), we regress live on modeled returns
+    (live = α + β·model + ε) and split the annualised drift into:
+
+      • `alpha`      — return the live book earns that the model does *not* explain;
+                       persistent, sign-stable slippage (real cost, data lag).
+      • `beta_gap`   — drift from running a *different exposure* than modeled
+                       (β ≠ 1): (β − 1)·mean(model), i.e. under/over-replication.
+      • `residual`   — annualised idiosyncratic tracking noise (std of ε).
+
+    alpha + beta_gap reconstruct the mean drift; residual sizes the noise around
+    it. A large `beta_gap` says "fix your sizing/replication"; a large negative
+    `alpha` says "your real costs exceed the assumed model cost."
+    """
+    df = pd.concat([live_returns.rename("live"), backtest_returns.rename("bt")], axis=1).dropna()
+    if len(df) < 20 or df["bt"].std() == 0:
+        return {"insufficient": True, "n": int(len(df))}
+    x = df["bt"].to_numpy()
+    y = df["live"].to_numpy()
+    beta, alpha = np.polyfit(x, y, 1)
+    resid = y - (alpha + beta * x)
+    mean_model = float(df["bt"].mean())
+    return {
+        "n": int(len(df)),
+        "beta": float(beta),
+        "alpha": float(alpha * BUSINESS_DAYS_YEAR),  # annualised unexplained drift
+        "beta_gap": float((beta - 1.0) * mean_model * BUSINESS_DAYS_YEAR),  # replication drift
+        "residual": float(resid.std() * ANNUAL_VOL_SQRT),  # annualised tracking noise
     }

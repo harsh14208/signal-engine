@@ -26,6 +26,7 @@ from .config import (
     CARRY_SCALAR,
     EWMAC_SCALARS,
     FORECAST_CAP,
+    VOL_MIN_PERIODS,
 )
 
 
@@ -121,6 +122,96 @@ def cross_sectional_momentum_forecast(
     rank = mom.rank(axis=1, pct=True)
     forecast = (rank - 0.5) * 2.0 * cap
     return forecast
+
+
+def _lead_lag_adjacency(window: pd.DataFrame, lag: int, top_k: int) -> np.ndarray:
+    """Directed leader→follower weight matrix from lagged cross-correlation.
+
+    ``W[l, m]`` is the (renormalised) strength with which instrument *l*'s past
+    return predicts instrument *m*'s current return. Only positive correlations
+    are kept; each follower keeps its ``top_k`` leaders, weights sum to 1.
+    """
+    cols = list(window.columns)
+    n = len(cols)
+    lagged = window.shift(lag)
+    w = np.zeros((n, n))
+    for j, m in enumerate(cols):  # follower m (column j)
+        ym = window[m]
+        scores: list[tuple[int, float]] = []
+        for i, leader in enumerate(cols):
+            if i == j:
+                continue
+            pair = pd.concat([lagged[leader], ym], axis=1).dropna()
+            if len(pair) < 20:
+                continue
+            c = pair.iloc[:, 0].corr(pair.iloc[:, 1])
+            if pd.notna(c) and c > 0:
+                scores.append((i, float(c)))
+        if not scores:
+            continue
+        scores.sort(key=lambda kv: kv[1], reverse=True)
+        top = scores[:top_k]
+        total = sum(s for _, s in top)
+        if total > 0:
+            for i, s in top:
+                w[i, j] = s / total
+    return w
+
+
+def network_momentum_forecast(
+    prices: pd.DataFrame,
+    returns: pd.DataFrame | None = None,
+    speed: tuple[int, int] = (32, 128),
+    lookback: int = 256,
+    lag: int = 1,
+    rebal: int = 63,
+    top_k: int = 3,
+    cap: float = FORECAST_CAP,
+) -> pd.DataFrame:
+    """Network ("follow the leader") momentum — a price-only cross-market signal.
+
+    Each instrument's forecast is the adjacency-weighted sum of its *leaders'*
+    time-series momentum, where the lead-lag graph is learned from trailing
+    lagged cross-correlations (arXiv 2501.07135). This is a genuinely new,
+    weakly-correlated return stream built from prices you already hold — a fit
+    for the "stack uncorrelated bets" thesis. Opt-in; validate vs placebo/CPCV
+    before promoting.
+
+    Causal: the adjacency at each rebal point uses only the trailing ``lookback``
+    window, and each leader's momentum uses only past prices.
+    """
+    prices = prices.sort_index()
+    if returns is None:
+        returns = prices.pct_change()
+    cols = list(prices.columns)
+    n = len(cols)
+    out = pd.DataFrame(0.0, index=prices.index, columns=cols)
+    if n < 2:
+        return out
+
+    fast, slow = speed
+    base = pd.DataFrame(
+        {
+            c: ewmac_forecast(
+                prices[c], returns[c].ewm(span=32, min_periods=VOL_MIN_PERIODS).std(), fast, slow
+            )
+            for c in cols
+        }
+    )
+    base_arr = base.to_numpy()
+    ret = returns[cols]
+    t = len(prices)
+    start = max(lookback, slow)
+    if start >= t:
+        return out
+
+    rebal_points = list(range(start, t, max(1, rebal)))
+    for seg, r0 in enumerate(rebal_points):
+        r1 = rebal_points[seg + 1] if seg + 1 < len(rebal_points) else t
+        window = ret.iloc[max(0, r0 - lookback) : r0]
+        w = _lead_lag_adjacency(window, lag, top_k)
+        out.iloc[r0:r1] = base_arr[r0:r1] @ w
+    return out.clip(-cap, cap)
 
 
 def trend_forecasts(
