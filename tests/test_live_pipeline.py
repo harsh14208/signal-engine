@@ -279,3 +279,31 @@ class TestAlpacaScript:
         )
         assert res["skipped"] is True
         assert res["reason"] == "kill_switch_engaged"
+
+
+class TestInputRevision:
+    def test_flags_revised_symbol(self):
+        from signal_engine.live import input_revision_report
+
+        dates = pd.bdate_range("2026-07-06", periods=3)
+        targets = [
+            {"date": d.strftime("%Y-%m-%d"), "forecast": {"TIP": -10.4, "SLV": -13.7, "TLT": None}}
+            for d in dates
+        ]
+        # Recomputed today: TIP flipped (data revision), SLV unchanged.
+        recomputed = pd.DataFrame({"TIP": [5.3, 5.3, 5.3], "SLV": [-13.7, -13.7, -13.7]}, index=dates)
+        rep = input_revision_report(targets, recomputed)
+        assert rep["clean"] is False
+        assert rep["n_symbols_revised"] == 1
+        assert "TIP" in rep["revised"]
+        assert rep["revised"]["TIP"]["max_abs_diff"] == pytest.approx(15.7)
+        assert rep["n_targets_checked"] == 3
+
+    def test_clean_when_reproducible(self):
+        from signal_engine.live import input_revision_report
+
+        dates = pd.bdate_range("2026-07-06", periods=2)
+        targets = [{"date": d.strftime("%Y-%m-%d"), "forecast": {"SPY": 15.8}} for d in dates]
+        recomputed = pd.DataFrame({"SPY": [15.8, 15.8]}, index=dates)
+        rep = input_revision_report(targets, recomputed)
+        assert rep["clean"] is True and rep["n_symbols_revised"] == 0

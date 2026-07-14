@@ -57,6 +57,27 @@ def _fmt_report(report: dict) -> str:
             f"min {edge['min']:.2f}  max {edge['max']:.2f}  "
             f"% windows <0: {edge['pct_windows_below_zero']:.0%}  ({alarm})"
         )
+    rev = report.get("input_revision")
+    if rev is not None:
+        lines.append("")
+        lines.append("## Input revision (stored vs recomputed forecasts)\n")
+        if rev.get("clean"):
+            lines.append(
+                f"- ✅ clean — {rev.get('n_targets_checked', 0)} recent target(s) "
+                "reproduce from today's data"
+            )
+        else:
+            lines.append(
+                f"- ⚠ INPUTS REVISED under {rev['n_symbols_revised']} symbol(s) "
+                f"(checked {rev['n_targets_checked']} targets):"
+            )
+            for sym, d in sorted(
+                rev["revised"].items(), key=lambda kv: -kv[1]["max_abs_diff"]
+            ):
+                lines.append(
+                    f"  - **{sym}** {d['date']}: stored {d['stored']:+.1f} → "
+                    f"recomputed {d['recomputed']:+.1f} (Δ{d['max_abs_diff']:.1f})"
+                )
     return "\n".join(lines)
 
 
@@ -109,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             recon_dir=args.recon_dir,
             kill_switch_path=args.kill_switch,
             alarm_floor=args.alarm_floor,
+            targets_path=args.targets,
         )
     except Exception as exc:
         print(f"reconcile failed: {exc}", file=sys.stderr)

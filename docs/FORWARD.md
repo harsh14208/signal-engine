@@ -111,6 +111,31 @@ When the kill switch is engaged:
 - The shadow book and reconciliation reports keep running so you can diagnose.
 - Resolve manually; delete or edit `data/kill_switch.json` to resume trading.
 
+## Point-in-time price cache + input-revision detection
+
+yfinance's `auto_adjust=True` back-adjusts the **entire** price history at every
+ex-dividend, so a naive nightly re-download silently rewrites the past the engine
+already traded on. This bit on **2026-07-10**: the first cache warm after the
+early-July bond-ETF ex-dividends rescaled TIP/IEF/LQD/HYG history, the stored TIP
+forecast (−10.4, short) recomputed to +5.3 (long), and the book whipsawed on a
+data artifact rather than a market move.
+
+Two defences now stand:
+
+- **PIT cache** (`signal_engine/data.py`): a yfinance refresh keeps cached dates
+  verbatim and ratio-stitches new rows on (exact forward total returns, immutable
+  past). Rejected upstream revisions are logged to `data/price_revisions.jsonl`.
+  The cached level drifts above the raw quote by the dividend yield accrued since
+  the last rebase — immaterial next to the 30% buffer and the broker gross cap.
+  Run `python scripts/warm_cache.py --rebase` to deliberately accept a fresh
+  adjusted history (this resets the basis and is itself logged; expect the
+  input-revision check to flag the following day).
+- **Input-revision check** (in `scripts/reconcile.py` output): recomputes the
+  last ~10 targets' forecasts from today's data and diffs against what was stored
+  at generation time. Engine drift is Phase-3 replay's job; this catches the
+  *data* changing under stored decisions. A `⚠ INPUTS REVISED` section names the
+  symbols and deltas.
+
 ## Disabling broker execution while keeping the shadow book
 
 Leave `execute_alpaca.py` commented out in `scripts/forward_loop.sh`. The shadow

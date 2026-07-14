@@ -66,3 +66,90 @@ def test_single_symbol_yfinance_rename(monkeypatch):
     px = data_module._fetch_yfinance(["SPY"], start="2020-01-01", end="2020-01-05")
     assert list(px.columns) == ["SPY"]
     assert (px["SPY"] == raw["Close"]).all()
+
+
+# ── PIT cache: stitching, revision detection, rebase ─────────────────────────
+def _panel(values: dict, start="2020-01-01"):
+    n = len(next(iter(values.values())))
+    return pd.DataFrame(values, index=pd.bdate_range(start, periods=n))
+
+
+class TestStitchUpdate:
+    def test_past_preserved_and_new_rows_appended(self):
+        """A revised fresh history must NOT rewrite cached dates; new dates append
+        with fresh forward returns, ratio-stitched onto the cached basis."""
+        old = _panel({"TIP": [100.0, 101.0, 102.0]})
+        # Upstream re-adjusted the past (×0.99) and added two new dates.
+        fresh = _panel({"TIP": [99.0, 99.99, 100.98, 102.0, 103.0]})
+        out, report = data_module._stitch_update(old, fresh)
+
+        # Cached history verbatim.
+        assert np.allclose(out["TIP"].iloc[:3].values, [100.0, 101.0, 102.0])
+        # New rows: same forward RETURNS as fresh, on the old basis.
+        expected = [102.0 * 102.0 / 100.98, 102.0 * 103.0 / 100.98]
+        assert np.allclose(out["TIP"].iloc[3:].values, expected)
+        # The rejected upstream revision is reported.
+        assert report["n_symbols_revised"] == 1
+        assert "TIP" in report["revised"]
+        assert report["revised"]["TIP"]["n_dates_revised"] == 3
+
+    def test_unrevised_symbol_clean(self):
+        old = _panel({"SLV": [50.0, 51.0]})
+        fresh = _panel({"SLV": [50.0, 51.0, 52.0]})
+        out, report = data_module._stitch_update(old, fresh)
+        assert report["n_symbols_revised"] == 0
+        assert np.allclose(out["SLV"].values, [50.0, 51.0, 52.0])
+
+    def test_new_symbol_taken_as_is(self):
+        old = _panel({"SPY": [400.0, 401.0]})
+        fresh = _panel({"SPY": [400.0, 401.0, 402.0], "GLD": [180.0, 181.0, 182.0]})
+        out, _ = data_module._stitch_update(old, fresh)
+        assert np.allclose(out["GLD"].dropna().values, [180.0, 181.0, 182.0])
+
+    def test_missing_fresh_symbol_keeps_history(self):
+        """A failed/rate-limited fetch for one symbol must not drop its history."""
+        old = _panel({"SPY": [400.0, 401.0], "GLD": [180.0, 181.0]})
+        fresh = _panel({"SPY": [400.0, 401.0, 402.0]})
+        out, _ = data_module._stitch_update(old, fresh)
+        assert np.allclose(out["GLD"].dropna().values, [180.0, 181.0])
+
+
+class TestLoadPricesPIT:
+    def _setup(self, tmp_path, monkeypatch, old, fresh):
+        monkeypatch.setattr(data_module, "_CACHE_DIR", str(tmp_path))
+        monkeypatch.setattr(data_module, "REVISIONS_LOG", str(tmp_path / "price_revisions.jsonl"))
+        old.to_parquet(tmp_path / "prices_pit.parquet")
+        monkeypatch.setattr(data_module, "_fetch_yfinance", lambda *a, **k: fresh)
+
+    def test_yfinance_refresh_does_not_rewrite_history(self, tmp_path, monkeypatch):
+        n = 400  # > 300-bar _clean filter
+        base = np.linspace(100.0, 140.0, n)
+        old = _panel({"TIP": base.tolist()})
+        fresh_hist = (base * 0.99).tolist() + [141.0, 142.0]
+        fresh = _panel({"TIP": fresh_hist})
+        self._setup(tmp_path, monkeypatch, old, fresh)
+
+        px = data_module.load_prices(["TIP"], source="yfinance", cache_tag="pit")
+        assert np.allclose(px["TIP"].iloc[:n].values, base)  # past immutable
+        assert len(px) == n + 2
+        # Revision logged.
+        log = (tmp_path / "price_revisions.jsonl").read_text().strip().splitlines()
+        assert len(log) == 1
+        import json as _json
+
+        event = _json.loads(log[0])
+        assert event["action"] == "stitched" and "TIP" in event["revised"]
+
+    def test_rebase_accepts_fresh_history(self, tmp_path, monkeypatch):
+        n = 400
+        base = np.linspace(100.0, 140.0, n)
+        old = _panel({"TIP": base.tolist()})
+        fresh = _panel({"TIP": (base * 0.99).tolist()})
+        self._setup(tmp_path, monkeypatch, old, fresh)
+
+        px = data_module.load_prices(["TIP"], source="yfinance", cache_tag="pit", rebase=True)
+        assert np.allclose(px["TIP"].values, base * 0.99)  # fresh wholesale
+        log = (tmp_path / "price_revisions.jsonl").read_text().strip().splitlines()
+        import json as _json
+
+        assert _json.loads(log[0])["action"] == "rebase"

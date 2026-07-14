@@ -7,12 +7,21 @@ zero extra installs.
 
 from __future__ import annotations
 
+import json
 import os
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+REVISIONS_LOG = os.path.join(_CACHE_DIR, "price_revisions.jsonl")
+
+# Relative price change on the cache/fresh overlap above which a symbol counts as
+# REVISED (yfinance back-adjusts the whole history at every ex-dividend). Loose
+# enough to ignore float noise from re-downloads, tight enough to catch a single
+# monthly bond-ETF dividend (~0.2-0.4%).
+REVISION_TOL = 5e-4
 
 
 # ── Synthetic generator (tests + offline demo) ───────────────────────────────
@@ -101,16 +110,81 @@ def _fetch_yfinance(symbols: list[str], start: str, end: str | None) -> pd.DataF
     return px
 
 
+def _log_revision_event(event: dict) -> None:
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    event = {"at": datetime.now(timezone.utc).isoformat(), **event}
+    with open(REVISIONS_LOG, "a") as f:
+        f.write(json.dumps(event) + "\n")
+
+
+def _stitch_update(old: pd.DataFrame, fresh: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Point-in-time cache update: keep cached history VERBATIM, append new dates.
+
+    yfinance `auto_adjust=True` back-adjusts the entire history at every
+    ex-dividend, so a naive full-overwrite silently rewrites the past the engine
+    already traded on — forecasts flip retroactively (the 2026-07-10 TIP/IEF
+    whipsaw) and live-vs-backtest reconciliation compares against a history that
+    never existed at decision time.
+
+    Instead, per symbol: rows up to the last cached date are kept unchanged, and
+    fresh rows after it are RATIO-STITCHED onto the cached basis
+    (`old[T] * fresh[t]/fresh[T]`, T = last common valid date), so forward
+    total returns are exact while the past stays immutable. The cached level
+    therefore drifts above the raw quote by the dividend yield accrued since the
+    last rebase — immaterial next to the 30% no-trade buffer and the broker-side
+    gross rescale; run `warm_cache.py --rebase` to deliberately reset the basis.
+
+    Returns (stitched_panel, revision_report). The report lists symbols whose
+    overlap moved beyond REVISION_TOL — the revisions being *rejected*.
+    """
+    all_cols = list(dict.fromkeys(list(old.columns) + list(fresh.columns)))
+    out: dict[str, pd.Series] = {}
+    revised: dict[str, dict] = {}
+    for col in all_cols:
+        if col not in fresh.columns or fresh[col].dropna().empty:
+            out[col] = old[col]  # fresh fetch failed/missing → keep history
+            continue
+        if col not in old.columns or old[col].dropna().empty:
+            out[col] = fresh[col]  # brand-new instrument → take as-is
+            continue
+        o, f = old[col].dropna(), fresh[col].dropna()
+        common = o.index.intersection(f.index)
+        if len(common) == 0:
+            out[col] = old[col]
+            continue
+        anchor = common.max()
+        rel = (f.loc[common] / o.loc[common] - 1.0).abs()
+        if float(rel.max()) > REVISION_TOL:
+            revised[col] = {
+                "max_rel_diff": float(rel.max()),
+                "n_dates_revised": int((rel > REVISION_TOL).sum()),
+                "first_revised": str(rel[rel > REVISION_TOL].index.min().date()),
+            }
+        new_rows = f.loc[f.index > anchor]
+        stitched = new_rows * (o.loc[anchor] / f.loc[anchor])
+        out[col] = pd.concat([o, stitched])
+    panel = pd.DataFrame(out).sort_index()
+    report = {"revised": revised, "n_symbols_revised": len(revised)}
+    return panel, report
+
+
 def load_prices(
     symbols: list[str],
     start: str = "2007-01-01",
     end: str | None = None,
     source: str = "auto",
     cache_tag: str = "universe",
+    rebase: bool = False,
 ) -> pd.DataFrame:
     """Return an adjusted-close panel (cols=symbols, index=dates), ffilled.
 
     source: 'synthetic' | 'yfinance' | 'cache' | 'auto' (cache→yfinance).
+
+    The cache is POINT-IN-TIME: a yfinance refresh never rewrites dates already
+    cached — new rows are ratio-stitched on (see `_stitch_update`), and rejected
+    upstream revisions are logged to `data/price_revisions.jsonl`. Pass
+    `rebase=True` to deliberately discard the cached basis and accept the fresh
+    adjusted history wholesale (also logged).
     """
     if source == "synthetic":
         return synthetic_prices(symbols)
@@ -132,7 +206,24 @@ def load_prices(
             raise FileNotFoundError(f"Cached prices at {path} missing requested symbols: {missing}")
 
     if source in ("yfinance", "auto"):
-        px = _fetch_yfinance(symbols, start, end)
+        fresh = _fetch_yfinance(symbols, start, end)
+        if os.path.exists(path) and not rebase:
+            old = pd.read_parquet(path)
+            px, report = _stitch_update(old, fresh)
+            if report["n_symbols_revised"]:
+                _log_revision_event(
+                    {"cache_tag": cache_tag, "action": "stitched", **report}
+                )
+                syms_r = ", ".join(sorted(report["revised"]))
+                print(
+                    f"⚠ upstream price revision REJECTED (PIT cache kept) for "
+                    f"{report['n_symbols_revised']} symbol(s): {syms_r} "
+                    f"→ logged to {os.path.basename(REVISIONS_LOG)}"
+                )
+        else:
+            px = fresh
+            if os.path.exists(path) and rebase:
+                _log_revision_event({"cache_tag": cache_tag, "action": "rebase"})
         px = _clean(px)
         px.to_parquet(path)
         return px

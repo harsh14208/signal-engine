@@ -525,6 +525,56 @@ def champion_challenger_report(
     return {"books": books, "recommendation": recommendation, "min_days": min_days}
 
 
+def input_revision_report(
+    targets: list[dict[str, Any]],
+    recomputed_forecasts: pd.DataFrame,
+    lookback: int = 10,
+    tol: float = 1.0,
+) -> dict[str, Any]:
+    """Compare stored at-generation forecasts to today's recomputation of the same dates.
+
+    The engine's decisions are archived in each target record. Recomputing those
+    dates from the CURRENT price/COT panels and diffing against what was stored
+    separates *data revision* (inputs changed under us — e.g. yfinance re-adjusting
+    history at an ex-dividend) from *engine drift* (code behaviour changed), which
+    the Phase-3 replay covers. A clean system diffs to ~0; the 2026-07-10 incident
+    (stored TIP forecast −10.4, recomputed +5.3) is exactly what this flags.
+
+    `tol` is in forecast units (forecasts are scaled to mean |f|≈10, cap ±20), so
+    tol=1.0 ≈ a 10% shift in typical signal strength.
+    """
+    revised: dict[str, dict[str, Any]] = {}
+    checked = 0
+    for t in targets[-lookback:]:
+        d = pd.Timestamp(t["date"])
+        if d not in recomputed_forecasts.index:
+            continue
+        checked += 1
+        for sym, stored in (t.get("forecast") or {}).items():
+            if stored is None or sym not in recomputed_forecasts.columns:
+                continue
+            recomputed = recomputed_forecasts.loc[d, sym]
+            if pd.isna(recomputed):
+                continue
+            diff = abs(float(stored) - float(recomputed))
+            if diff > tol:
+                prev = revised.get(sym)
+                if prev is None or diff > prev["max_abs_diff"]:
+                    revised[sym] = {
+                        "max_abs_diff": diff,
+                        "date": t["date"],
+                        "stored": float(stored),
+                        "recomputed": float(recomputed),
+                    }
+    return {
+        "n_targets_checked": checked,
+        "n_symbols_revised": len(revised),
+        "tol": tol,
+        "revised": revised,
+        "clean": not revised,
+    }
+
+
 def run_reconciliation(
     target: dict[str, Any] | None = None,
     source: str = "auto",
@@ -532,6 +582,7 @@ def run_reconciliation(
     recon_dir: Path | str = DEFAULT_RECON_DIR,
     kill_switch_path: Path | str = DEFAULT_KILL_SWITCH_PATH,
     alarm_floor: float = 0.0,
+    targets_path: Path | str = DEFAULT_TARGETS_PATH,
 ) -> dict[str, Any]:
     """Generate a reconciliation report, persist it, and update the kill-switch."""
     returns_path = Path(returns_path)
@@ -557,6 +608,17 @@ def run_reconciliation(
     rec = reconcile(live, modeled)
     edge = edge_decay_report(live, alarm_floor=alarm_floor)
 
+    # Data-honesty check: did the inputs get revised under recently-stored decisions?
+    # (Engine drift is Phase-3 replay's job; this catches upstream data rewrites.)
+    book_targets = [
+        t for t in load_all_targets(targets_path) if t.get("book", "champion") == book
+    ]
+    revision = (
+        input_revision_report(book_targets, result.forecasts)
+        if hasattr(result, "forecasts") and book_targets
+        else {"n_targets_checked": 0, "n_symbols_revised": 0, "revised": {}, "clean": True}
+    )
+
     report = {
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "target_date": target.get("date") if target else None,
@@ -565,6 +627,7 @@ def run_reconciliation(
         "live_sharpe": float(sharpe(live)) if len(live) > 60 else None,
         "reconciliation": rec,
         "edge_decay": edge,
+        "input_revision": revision,
     }
 
     kill = {"paused": False}
