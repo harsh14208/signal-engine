@@ -193,6 +193,7 @@ class TestReconciliation:
                 "live_return": result.gross_returns.values,
                 "mode": "shadow",
                 "use_cot": True,
+                "book": "champion",
             }
         )
         live_df.to_csv(returns_path, index=False)
@@ -239,6 +240,7 @@ class TestReconciliation:
                 "live_return": noise.values,
                 "mode": "shadow",
                 "use_cot": True,
+                "book": "champion",
             }
         )
         live_df.to_csv(returns_path, index=False)

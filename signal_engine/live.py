@@ -342,7 +342,12 @@ def append_shadow_return(
 
     existing = pd.read_csv(returns_path, parse_dates=["date"]) if returns_path.exists() else None
     if existing is not None and len(existing):
-        book_col = existing["book"] if "book" in existing.columns else "champion"
+        # Normalise a blank/missing book to "champion" so legacy rows (written before
+        # the champion/challenger split) dedup against today's champion marks instead
+        # of slipping through as duplicates — mirrors _book_label's fillna("champion").
+        book_col = (
+            existing["book"].fillna("champion") if "book" in existing.columns else "champion"
+        )
         dup = ((existing["date"] == mark_date) & (book_col == book)).any()
         if dup:
             return {
@@ -371,6 +376,46 @@ def append_shadow_return(
     return {"record": row, "path": str(returns_path)}
 
 
+def mark_all_shadow_returns(
+    targets_path: Path | str = DEFAULT_TARGETS_PATH,
+    source: str = "auto",
+    end: str | None = None,
+    returns_path: Path | str = DEFAULT_RETURNS_PATH,
+) -> list[dict[str, Any]]:
+    """Mark the next-day return for EVERY target, backfilling any that were missed.
+
+    The daily loop generates a target for the new session and only *then* marks
+    returns; marking just the latest target therefore always hits the one record
+    that has no next-day close yet ("no_next_day_price"), so nothing accumulates.
+    Marking every target instead — idempotently, since `append_shadow_return`
+    dedups on (mark_date, book) — backfills the whole forward track record and
+    stays a no-op once each day is recorded. One price panel is loaded for the
+    full target span so the pass is a single fetch rather than one per target.
+    """
+    all_targets = load_all_targets(targets_path)
+    if not all_targets:
+        return []
+    end = end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    syms = sorted({s for t in all_targets for s in t.get("units", {}) if s})
+    start = min(t["date"] for t in all_targets)
+    prices = load_prices(syms, start=start, end=end, source=source, cache_tag="universe")
+    prices = _slice_prices(prices, start=start, end=end)
+
+    results: list[dict[str, Any]] = []
+    for target in sorted(all_targets, key=lambda t: (t["date"], t.get("book", "champion"))):
+        res = append_shadow_return(
+            target=target,
+            source=source,
+            end=end,
+            returns_path=returns_path,
+            prices=prices,
+        )
+        res.setdefault("book", target.get("book", "champion"))
+        res.setdefault("target_date", target["date"])
+        results.append(res)
+    return results
+
+
 def build_backtest_for_reconciliation(
     target: dict[str, Any] | None,
     source: str = "auto",
@@ -391,21 +436,34 @@ def build_backtest_for_reconciliation(
     return result.daily_returns, result
 
 
-def load_live_returns(path: Path | str = DEFAULT_RETURNS_PATH) -> pd.Series:
-    """Load shadow/live returns as a date-indexed Series."""
+def load_live_returns(
+    path: Path | str = DEFAULT_RETURNS_PATH, book: str | None = None
+) -> pd.Series:
+    """Load shadow/live returns as a date-indexed Series.
+
+    With multiple books recorded (champion/challenger), a given date can appear
+    once per book, so callers that need a single aligned series (reconciliation)
+    must pass `book` to select one — otherwise the index carries duplicate dates.
+    """
     path = Path(path)
     if not path.exists():
         return pd.Series(dtype=float, name="live_return")
     df = pd.read_csv(path, parse_dates=["date"])
+    if book is not None:
+        df = df[_book_label(df) == book]
     return df.set_index("date")["live_return"].sort_index()
 
 
-def load_live_return_modes(path: Path | str = DEFAULT_RETURNS_PATH) -> pd.Series:
-    """Load the mode (shadow / paper / live) per live-return date."""
+def load_live_return_modes(
+    path: Path | str = DEFAULT_RETURNS_PATH, book: str | None = None
+) -> pd.Series:
+    """Load the mode (shadow / paper / live) per live-return date (optionally one book)."""
     path = Path(path)
     if not path.exists():
         return pd.Series(dtype=str, name="mode")
     df = pd.read_csv(path, parse_dates=["date"])
+    if book is not None:
+        df = df[_book_label(df) == book]
     if "mode" not in df.columns:
         return pd.Series("shadow", index=df["date"], name="mode").sort_index()
     return df.set_index("date")["mode"].sort_index()
@@ -481,9 +539,13 @@ def run_reconciliation(
     kill_switch_path = Path(kill_switch_path)
     recon_dir.mkdir(parents=True, exist_ok=True)
 
+    # Reconcile the DEPLOYED book against a backtest of that book's config. Without
+    # selecting a book the live series carries one row per book per date (duplicate
+    # index) and alignment against the modeled series fails.
+    book = target.get("book", "champion") if target else "champion"
     modeled_series, result = build_backtest_for_reconciliation(target, source=source)
-    live = load_live_returns(returns_path)
-    modes = load_live_return_modes(returns_path)
+    live = load_live_returns(returns_path, book=book)
+    modes = load_live_return_modes(returns_path, book=book)
     # Shadow returns are costless, so compare to modeled gross. Broker modes have
     # real costs, so compare to modeled net.
     compare_gross = (
