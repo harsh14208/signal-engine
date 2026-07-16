@@ -1,20 +1,21 @@
 # signal-engine — next best items
 
-**Status (2026-06-27):** real-data (2007–2026, 19 ETF proxies) net Sharpe **0.69**,
+**Status (2026-07-15):** real-data (2007–2026, 19 ETF proxies) net Sharpe **0.69**,
 MaxDD −38%, vol on target (21.4%); clears placebo + Lo CI, and now **clears Deflated
 Sharpe at the honest trial count**. The honest read is the **4-fold walk-forward**
 (mean OOS **0.61**, gap +0.12), NOT the single 70/30 split (OOS 0.55).
-Validated wins: realised-vol **governor** and **30% position buffer**. 🟢 **NEW —
-forward-deployment harness (Tier A) is live: no-broker shadow book + reconciliation +
-guardrails + optional Alpaca paper.** 🟢 **NEW — `--cot` (CFTC Commitments-of-Traders
-positioning) is the FIRST free signal to clear
-the walk-forward** (full 0.69→0.72, single-split OOS 0.55→0.60, walk-forward mean
-OOS 0.61→0.63, block-boot P5 0.34→0.38; pre-specified contrarian sign). Kept opt-in
-(network fetch + modest, fold-concentrated margin) — recommended for promotion
-pending wider coverage / forward confirmation. Confirmed dead-ends / opt-in only:
-**asset-class cluster weighting**, **VIX term-structure overlay**, **Baa-10Y
-credit-spread overlay**, **GARCH vol sizing**, **HMM regime overlay**, **S&P 500
-x-sectional momentum sleeve**, **VRP injection (detonates vol-targeting — parked)**.
+Validated wins: realised-vol **governor**, **30% position buffer**, **`--cot`**,
+**`--semis`**, **`--qqq`**, and **`--network-momentum`**. 🟢 **NEW — financing /
+leverage-cost model** (`--financing-rate`, `--financing-threshold`, `--max-gross`)
+so bond-pack additions are compared on a like-for-like cost basis. 🟢 **NEW — six
+research/patent optimizations implemented as opt-in diagnostics**: drift
+decomposition, warm-up parity, quartile edge-decay, calibration smoothing, drawdown
+control, and trend-strength filter. **None improved walk-forward OOS Sharpe versus
+the financed baseline**, so they remain research flags. Confirmed dead-ends /
+opt-in only: **asset-class cluster weighting**, **VIX term-structure overlay**,
+**Baa-10Y credit-spread overlay**, **GARCH vol sizing**, **HMM regime overlay**,
+**S&P 500 x-sectional momentum sleeve**, **VRP injection (detonated vol-targeting —
+parked)**, **drawdown control**, **trend-strength filter**, **calibration smoothing**.
 ⚠ **`--ship-candidate` is NOT promoted** — single-split false dawn. The validated
 default remains **core 19 + governor + 30% buffer**.
 
@@ -42,6 +43,17 @@ is the whole reason this engine beats the 0.15-Sharpe project it replaced.
       gap +0.03 on a single 70/30 split, but the **4-fold walk-forward refutes it**
       (mean OOS 0.54 < the plain default's 0.59, gap +0.28). A single-split false dawn —
       kept as a research flag only. Lesson: promote on the walk-forward, never one split.
+- [x] **Financing / leverage-cost model** — `Config.financing_rate`,
+      `financing_threshold`, `max_annual_financing_cost`; `--max-gross` gross-notional
+      cap. A 1% spread reduces Net Sharpe ~0.10–0.13 and makes equity packs (`--semis`,
+      `--qqq`, `--network-momentum`) competitive with levered bond packs.
+- [x] **Instrument-pack flags** — `--semis`, `--qqq`, `--diversifier-pack`,
+      `--rate-pack`. Semis and QQQ are VALIDATED-POSITIVE; bond packs are leverage-
+      dependent and must be evaluated with `--financing-rate`.
+- [x] **Six research/patent optimizations (diagnostic only)** — drift decomposition,
+      warm-up/restart parity, quartile edge-decay alarm, calibration smoothing, drawdown
+      control, trend-strength filter. Implemented and evaluated under 3× cap + 1%
+      financing; none improved OOS Sharpe versus baseline, so they remain opt-in.
 
 ## 🗑️ Confirmed dead-end (kept as a research flag, OFF by default)
 - **Asset-class cluster weighting** (`--cluster-weights`): hurt across the board

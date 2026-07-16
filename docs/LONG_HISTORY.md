@@ -37,6 +37,12 @@ real futures.
 ~35× cumulative equity. Classic trend crisis alpha (GFC/COVID/2022 strong); recent
 years weak, consistent with the industry-wide 2023–25 trend drawdown.
 
+A causal **trend-strength filter** (de-gear when average absolute forecast is in the
+bottom quartile of its recent history) was tested specifically to address this era.
+It is neutral on the full sample and does **not** recover the 2023–26 Sharpe with
+default parameters, suggesting the weakness is genuine trend-decay rather than a
+low-strength regime that can be timed in-sample. See `docs/OPTIMIZATIONS.md`.
+
 ## Honesty battery over the full 27.5y — ✅ PASS (comfortable)
 ```
 H1 clears_noise:    net 0.74 vs noise-floor 0.40   ✅

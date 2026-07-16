@@ -51,6 +51,9 @@ live diverges, "did the data lineage change?" becomes answerable.
 
 ## Integration
 - Target records carry `lineage_hash`; `generate_target` writes a PIT snapshot.
+  The snapshot includes the new optimization flags (`use_drawdown_control`,
+  `use_trend_strength_filter`, `calibration_smooth`, etc.) so Phase 3 replay can
+  reconstruct decisions exactly even when research levers are enabled.
 - The edge gate ([validate_edge](../scripts/validate_edge.py)) reports panel health
   as context — a PASS on a dirty panel is now visible.
 - Tests: `tests/test_phase2_data.py` (15). Full suite 187 green.

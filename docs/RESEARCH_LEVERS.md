@@ -85,34 +85,58 @@ The regime literature's flagged failure mode is using **smoothed** HMM probabili
 - **Drawdown-state control:** move-to-cash / de-risk on a realised drawdown threshold,
   re-risk at recovery (2024 finding: +9.8% avg in the 12m after >10% DDs). You already
   have the vol governor doing continuous de-risking; a discrete DD state is additive
-  but easy to overfit the threshold. Test as opt-in only.
+  but easy to overfit the threshold. **Implemented** as `portfolio.drawdown_overlay`
+  and `Config.use_drawdown_control`; tested opt-in only. Lowers MaxDD but leaves
+  risk-adjusted return roughly unchanged.
 - **Weight persistence across recalibration:** enforce gradual weight changes across
   the expanding-window refits to cut estimation-driven turnover (research: improves
-  stability). Cheap, low-risk, small effect.
+  stability). Cheap, low-risk, small effect. **Implemented** as
+  `Config.calibration_smooth` and `_smooth_parameter_transitions` in `backtest.py`;
+  neutral on aggregate performance in this dataset.
+- **Trend-strength filter:** de-gear when the average absolute combined forecast is in
+  the weakest historical percentile, targeting low-trend regimes such as 2023–26.
+  **Implemented** as `portfolio.trend_strength_overlay` and
+  `Config.use_trend_strength_filter`; neutral on the full sample and does not recover
+  the recent weakness with default parameters.
 - **Volatility parity vs vol targeting** for position sizing: an alternative to your
   vol-target sizing; the 2024 evidence is that vol-targeting alpha ≈ a trend loading,
   so don't expect free Sharpe — likely inert on your walk-forward. Low priority.
 
 ---
 
-## Implementation status (2026-07-09 — all shipped)
+## Implementation status (2026-07-15 — all shipped)
 
-| Lever | Where | How to use |
-|---|---|---|
-| CPCV | `validation.combinatorial_purged_cv(prices, cfg, n_groups, k_test)` | returns OOS-Sharpe distribution + `pct_paths_below_zero` |
-| PBO | `validation.probability_backtest_overfitting(returns_matrix)` | pass a T×N panel of candidate-config returns → `pbo` |
-| Honest n_trials | `validation.register_trial(cfg)` / `honest_n_trials()` | fingerprints to `data/trial_registry.jsonl`; feed to Deflated Sharpe |
-| Lookahead guard | `validation.assert_no_lookahead(fn, data)` | raises if history changes when the tail is revealed |
-| Effective bets | `diagnostics.effective_number_of_bets(returns)` / `diversification_audit(result)` | ENB + `idm_vs_effective` |
-| Network momentum | `Config(use_network_momentum=True)` (opt-in) | new price-only rule wired through FDM |
-| Drift decomposition | `monitor.decompose_drift` (auto-included in `reconcile`) | α / β-gap / residual split |
-| Quartile edge-decay | `monitor.edge_decay_report` → `worst_quartile`, `decay_warning` | kill-switch `alarm` unchanged |
-| Champion/challenger | `generate_targets.py --challenger`; `live.champion_challenger_report()` | parallel books, promote on forward evidence |
-| Arrival slippage | `live.compute_delay_slippage`; `append_shadow_return(arrival_prices=...)` | records `delay_return` |
-| Stabilised gross cap | `execute_alpaca.py --equity-buffer --equity-ref-halflife` | buffer + smoothed-equity anchor |
+| Lever | Where | How to use | Status |
+|---|---|---|---|
+| CPCV | `validation.combinatorial_purged_cv(prices, cfg, n_groups, k_test)` | returns OOS-Sharpe distribution + `pct_paths_below_zero` | shipped |
+| PBO | `validation.probability_backtest_overfitting(returns_matrix)` | pass a T×N panel of candidate-config returns → `pbo` | shipped |
+| Honest n_trials | `validation.register_trial(cfg)` / `honest_n_trials()` | fingerprints to `data/trial_registry.jsonl`; feed to Deflated Sharpe | shipped |
+| Lookahead guard | `validation.assert_no_lookahead(fn, data)` | raises if history changes when the tail is revealed | shipped |
+| Effective bets | `diagnostics.effective_number_of_bets(returns)` / `diversification_audit(result)` | ENB + `idm_vs_effective` | shipped |
+| Network momentum | `Config(use_network_momentum=True)` / `--network-momentum` | new price-only rule wired through FDM | **VALIDATED-POSITIVE** |
+| Drift decomposition | `monitor.decompose_drift` (auto-included in `reconcile`) | α / β-gap / residual split | shipped |
+| Quartile edge-decay | `monitor.edge_decay_report` → `worst_quartile`, `decay_warning`; `--alarm-on-worst-quartile` | kill-switch input + diagnostic | shipped |
+| Champion/challenger | `generate_targets.py --challenger`; `live.champion_challenger_report()` | parallel books, promote on forward evidence | shipped |
+| Arrival slippage | `live.compute_delay_slippage`; `append_shadow_return(arrival_prices=...)` | records `delay_return` | shipped |
+| Stabilised gross cap | `execute_alpaca.py --equity-buffer --equity-ref-halflife` | buffer + smoothed-equity anchor | shipped |
+| Calibration smoothing | `Config.calibration_smooth` / `--calibration-smooth` | gradual weight/IDM/FDM transitions | shipped, neutral |
+| Drawdown control | `Config.use_drawdown_control` / `--drawdown-control` | causal DD-state de-grossing | shipped, risk-only |
+| Trend-strength filter | `Config.use_trend_strength_filter` / `--trend-strength-filter` | de-gear on weak combined forecasts | shipped, neutral |
+| Warm-up / restart parity | `Config.min_history_required()`; guard in `live.generate_target` | errors on insufficient history | shipped |
 
 Regime overlays audited causal (`macro.py`); guard is `validation.assert_no_lookahead`.
-Covered by `tests/test_research_levers.py` (26 tests). All 160 tests pass.
+Covered by `tests/test_research_levers.py` (26 tests). All tests pass.
+
+### Validation notes on the newer levers
+
+- **Network momentum** was promoted to VALIDATED-POSITIVE after it improved or matched
+  walk-forward OOS Sharpe across multiple test configurations; it is included by
+  default in the options-evaluation universe.
+- **Drawdown control**, **calibration smoothing**, and **trend-strength filter** were
+  evaluated under 3× gross cap + 1% financing (`scripts/eval_optimizations.py`). None
+  improved OOS Sharpe versus the baseline; they remain **opt-in / diagnostic only**.
+- **Quartile edge-decay** and **warm-up parity** are safety/diagnostic features with
+  no performance claim.
 
 ## Recommended build order
 1. **CPCV + PBO** (`validation.py`) — pure honesty upside, catches the failure mode

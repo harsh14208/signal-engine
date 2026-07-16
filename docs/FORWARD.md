@@ -98,6 +98,10 @@ Watch for:
 - `⚠ ALARM` — rolling 1-year live Sharpe has dropped below 0. This also fires
   the kill switch.
 
+`reconcile.py` now also reports a **drift decomposition** (α / β-gap / residual)
+and a **worst-quartile edge-decay flag** when `--alarm-on-worst-quartile` is set.
+These are diagnostic only and do not themselves trip the kill switch.
+
 ## Alarms and the kill switch
 
 `scripts/reconcile.py` writes `data/kill_switch.json` when:
@@ -189,3 +193,14 @@ The scripts are idempotent:
 - `reconcile.py` reports "insufficient live data" until at least 20 shared dates exist.
 
 If a market holiday causes no new close, the loop records nothing for that day.
+
+## Stateful restart / warm-up parity
+
+`scripts/generate_targets.py` and the live target generator require price history
+at least as long as the longest lookback used by the enabled rules/overlays. A
+cold-started loop that has fewer bars will raise a clear error rather than silently
+produce different indicator state than a continuously-running loop. This guards the
+exact restart-divergence failure mode documented by QuantConnect.
+
+The same guard applies to the new opt-in overlays (drawdown control, trend-strength
+filter) — their lookback windows must be satisfiable from the available history.

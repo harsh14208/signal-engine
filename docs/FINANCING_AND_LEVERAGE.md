@@ -91,6 +91,23 @@ Do **not** promote bond-pack or corr-cluster variants to default without also se
 2. Their rankings improve on a like-for-like cost basis.
 3. They keep trade frequency and gross exposure in line with the baseline.
 
+## Cross-check against the six research/patent optimizations
+
+`scripts/eval_optimizations.py` re-ran the new opt-in levers (calibration smoothing,
+drawdown control, trend-strength filter, network momentum) under the same 3× cap +
+1% financing bar. None beat the baseline on walk-forward OOS Sharpe:
+
+| Configuration | Net SR | WF OOS SR | Max DD |
+|---|---:|---:|---:|
+| Baseline | 0.539 | 0.427 | −33.2% |
+| + drawdown control | 0.510 | 0.417 | −26.2% |
+| + trend-strength filter | 0.536 | 0.428 | −31.4% |
+| + calibration smooth | 0.539 | 0.427 | −33.2% |
+| + drawdown + trend | 0.496 | 0.444 | −26.2% |
+
+This confirms that the financing model is the dominant real-world constraint;
+overlay refinements are secondary until they can clear the same honest bar.
+
 ## Files and scripts
 
 - Implementation: `signal_engine/config.py`, `signal_engine/cli.py`, `signal_engine/backtest.py`, `signal_engine/live.py`

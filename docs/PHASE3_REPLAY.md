@@ -51,6 +51,19 @@ detect_drift(snapshot_dir=..., source="cache")           # aggregate + alarm
 
 Full suite: 195 tests green, lint clean.
 
+## Complementary return-level diagnostics
+
+Phase 3 is *decision-level* verification. The separate return-level diagnostics in
+`monitor.py` are also useful:
+
+- `monitor.decompose_drift(live_returns, backtest_returns)` splits live-vs-backtest
+  drift into α, β-gap, and residual — useful for attributing slippage sources.
+- `monitor.edge_decay_report(...)` tracks rolling 1-year live Sharpe and a worst-
+  quartile flag.
+
+These do not replace replay (they operate on returns, not decisions), but they are
+cheap to run and help decide whether a divergence is execution, model, or data.
+
 ## Phases 0–3 recap
 | Phase | Capability | Entry point |
 |---|---|---|

@@ -110,4 +110,7 @@ Takeaways:
 - **Calibration smoothing** does not change aggregate performance on this dataset because the expanding-window parameters stabilise early and change only at rebal dates.
 - **Network momentum** is essentially unchanged versus the baseline because it was already validated-positive and is on by default in the evaluation universe.
 
-Conclusion: keep the levers available for research and diagnostics, but do **not** enable any of them as defaults without an honest validation bar (Deflated Sharpe, block bootstrap, placebo tests).
+Conclusion: keep the levers available for research and diagnostics, but do **not**
+enable any of them as defaults. A full Deflated-Sharpe / block-bootstrap / placebo
+bar was deemed unnecessary because the first OOS check already failed; running more
+tests would mainly increase false-discovery risk.

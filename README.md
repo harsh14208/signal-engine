@@ -227,7 +227,9 @@ front, don't fake the result.
 - **`--monitor`** prints the strategy's rolling 1-year Sharpe with an edge-decay
   alarm; `monitor.reconcile(live, backtest)` scores live-vs-backtest agreement
   (correlation / tracking error / drift) for when live returns exist — the
-  reconciliation harness the parent project never had.
+  reconciliation harness the parent project never had. Recent additions: a Perold-
+  style drift decomposition (α / β-gap / residual) and a worst-quartile edge-decay
+  flag (`--alarm-on-worst-quartile`).
 - **`--semis` (VALIDATED-POSITIVE):** adds SMH/SOXX/XSD to the core universe.
   Walk-forward OOS improves from 0.63 to 0.69, traded days increase, and gross
   exposure stays in line with the baseline. **Shipped** as a validated instrument-pack
@@ -245,6 +247,15 @@ front, don't fake the result.
   capital) post-governor. Useful for reality-checking how much an apparent edge
   depends on levering low-vol instruments; note that a tight cap lowers realized
   vol and can push Sharpe below the Deflated-Sharpe bar.
+- **`--financing-rate R`** charges an annual spread on gross notional above
+  `--financing-threshold` (default 1.0). Without this, levered bond packs look like
+  a free Sharpe improvement. See `docs/FINANCING_AND_LEVERAGE.md` — the 1% case
+  reduces Sharpe by ~0.10–0.13 and reshuffles the best variants toward equity packs.
+- **Research-only overlays (diagnostic / opt-in):** drawdown-state control
+  (`--drawdown-control`), trend-strength filter (`--trend-strength-filter`), and
+  calibration smoothing (`--calibration-smooth`) are implemented but did **not**
+  improve walk-forward OOS Sharpe versus the financed baseline. They remain available
+  for experimentation. See `docs/OPTIMIZATIONS.md`.
 - **`--help` ends with a flag taxonomy**: CORE (validated) / VALIDATED-POSITIVE
   (clears walk-forward, safe to ship) / RESEARCH (tested, none beat default) /
   INSTRUMENT PACKS (leverage-dependent) / VALIDATION-DIAGNOSTICS. ~70 flags exist

@@ -69,3 +69,14 @@ never silently change the constant.
 Phase 2 (provider reliability, market calendar, point-in-time feature store),
 Phase 3 (replay-based decision-level drift detection), Phase 4 (HRP + PCA risk) —
 all justified only if the edge holds on real-futures data and a live track.
+
+### Research-only levers (not subjected to the full Phase 0 bar)
+
+Six additional optimizations from the research/patent sweep were implemented as
+opt-in diagnostics: implementation-shortfall drift decomposition, warm-up/stateful-
+restart parity, quartile edge-decay kill switch, calibration smoothing, drawdown-
+state control, and trend-strength filter. A financed 3×-cap evaluation
+(`scripts/eval_optimizations.py`) found that **none improves walk-forward OOS
+Sharpe versus the baseline**, so they remain research flags. They were not run
+through the full Phase 0 honesty battery because the first OOS check already failed;
+running more tests would only increase false-discovery risk.

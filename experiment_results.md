@@ -92,3 +92,60 @@ All variants run with `--max-gross 3.0` unless noted.
 - Added `--financing-rate` / `--financing-threshold` CLI flags.
 - Financing is applied after gross-notional capping and subtracted from daily net returns; it therefore flows into Sharpe, drawdown, and all downstream metrics.
 - Added `scripts/eval_options_financing.py` and saved results to `data/options_evaluation_financing.json`.
+
+
+---
+
+# Experiment results — six research/patent optimizations (with financing)
+
+Date: 2026-07-15
+Data: real ETF-proxy prices (cache), 2007–2026, core universe + semis/QQQ options pack.
+Method: 5-fold purged walk-forward (20% embargo); full-sample backtest for Net Sharpe.
+All variants run with `--max-gross 3.0 --financing-rate 0.01`.
+
+## Summary
+
+| Configuration | Net SR | WF OOS SR | IS−OOS gap | Ann vol | Max DD | Mean gross | Turnover |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 0.539 | 0.427 | 0.154 | 15.5% | −33.2% | 2.68× | 24.1× |
+| + calibration smooth | 0.539 | 0.427 | 0.154 | 15.5% | −33.2% | 2.68× | 24.1× |
+| + drawdown control | 0.510 | 0.417 | 0.093 | 12.2% | −26.2% | 2.04× | 19.1× |
+| + trend-strength filter | 0.536 | 0.428 | 0.108 | 15.1% | −31.4% | 2.60× | 24.9× |
+| + network momentum | 0.543 | 0.422 | 0.121 | 15.6% | −35.0% | 2.67× | 23.5× |
+| + drawdown + trend | 0.496 | 0.444 | 0.052 | 12.1% | −26.2% | 2.04× | 18.1× |
+| + drawdown + trend + network mom + smooth | 0.505 | 0.435 | 0.070 | 12.2% | −26.2% | 2.02× | 18.3× |
+
+## Interpretation
+
+- **None of the new combinations improves walk-forward OOS Sharpe versus the baseline.**
+  They remain **opt-in / diagnostic only**.
+- **Drawdown control** works as designed: it lowers realised volatility and maximum
+  drawdown, but also lowers returns, leaving risk-adjusted return essentially flat.
+- **Trend-strength filter** is neutral on the full sample and does not recover the
+  2023–26 weakness with default parameters, suggesting that weakness is genuine
+  trend decay rather than a low-strength regime fixable in-sample.
+- **Calibration smoothing** does not change aggregate performance on this dataset
+  because expanding-window parameters stabilise early and change only at rebal dates.
+- **Network momentum** is already validated-positive and essentially matches the
+  baseline here because it is included in the options-evaluation universe by default.
+
+## Decision
+
+No full Deflated-Sharpe / block-bootstrap / placebo bar was run on these combos.
+The first OOS check failed for every combo relative to the baseline, so further
+validation would mainly increase false-discovery risk. The levers stay available
+in `Config` / the CLI for research and diagnostics.
+
+## Implementation
+
+- `signal_engine/config.py` — new fields for calibration smoothing, drawdown control,
+  and trend-strength filter.
+- `signal_engine/portfolio.py` — `drawdown_overlay()`, `trend_strength_overlay()`.
+- `signal_engine/backtest.py` — applies overlays before gross cap and financing cost;
+  `_smooth_parameter_transitions()` for calibration smoothing.
+- `signal_engine/monitor.py` — `decompose_drift()`; `worst_quartile` flag in
+  `edge_decay_report()`.
+- `signal_engine/live.py` — warm-up / stateful-restart parity guard.
+- `signal_engine/cli.py` — new flags.
+- Added `scripts/eval_optimizations.py`; results saved to
+  `data/options_evaluation_optimizations.json`.
