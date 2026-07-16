@@ -147,6 +147,9 @@ def _args(**kwargs) -> object:
         "trend_strength_window": 63,
         "trend_strength_threshold": 0.25,
         "trend_strength_scale": 0.70,
+        "use_crypto": False,
+        "crypto_max_risk_weight": 0.05,
+        "use_curated_breadth": False,
     }
     defaults.update(kwargs)
     return type("Args", (), defaults)()

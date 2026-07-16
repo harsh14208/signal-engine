@@ -133,6 +133,55 @@ noise). None of these require paid data.
    research project.
    *Cost: small — all the pieces exist; this is wiring.*
 
+## Free breadth / carry levers (2026-07-15 request)
+
+Five free-data additions proposed to improve the walk-forward edge without a paid
+futures feed. All evaluated under the honest 3× gross cap + 1% financing bar.
+
+### Phase 1 — symbol-only breadth (implemented)
+
+1. [x] **Crypto pack (`--crypto`).** Added BTC-USD + ETH-USD as an opt-in pack with a
+   `crypto_max_risk_weight` cap (default 5% of portfolio risk target per coin) to
+   prevent crypto from dominating IDM. **Result:** crypto **hurts** the financed
+   walk-forward OOS Sharpe:
+
+   | Configuration | Net SR | WF OOS SR | Max DD | Promotion |
+   |---|---:|---:|---:|---|
+   | baseline | 0.538 | 0.493 | −33.2% | — |
+   | +crypto | 0.394 | 0.261 | −41.5% | HOLD |
+   | +curated breadth | 0.441 | 0.364 | −34.5% | HOLD |
+   | +crypto +curated breadth | 0.323 | 0.184 | −39.7% | HOLD |
+   | +semis | 0.547 | 0.520 | −33.9% | HOLD (indistinguishable) |
+   | +crypto +curated breadth +semis | 0.345 | 0.260 | −36.2% | HOLD |
+
+   Crypto's shorter history and high drawdowns are not offset by diversification
+   under the financing model. Left as a research flag; not promoted.
+
+2. [x] **Curated breadth pack (`--curated-breadth`).** Added correlation-selected
+   additions: UNG, CPER, CORN, WEAT, SOYB, EMB, BWX, FXA, FXB, FXC. Result is
+   directionally negative but statistically indistinguishable from baseline
+   (delta −0.129, 95% CI [−0.221, +0.023]). Left as a research flag.
+
+### Phase 2 — FX carry from FRED rate differentials (next)
+
+3. [ ] **FX carry (`--fx-carry`).** Use free FRED policy/short rates to compute
+   rate differentials vs USD and apply them to FX ETFs (FXE/FXY/UUP + FXA/FXB/FXC).
+   Expected +0.05–0.10 Sharpe.
+
+### Phase 3 — spot commodity carry (next)
+
+4. [ ] **Spot roll-yield carry (`--spot-carry`).** Use EIA WTI/Henry Hub spot and
+   LBMA gold/silver fixes (or yfinance proxies) to compute realized roll-yield
+   signals for USO/UNG/GLD/SLV. Expected +0.03–0.08.
+
+### Phase 4 — VRP risk-capped sleeve (last)
+
+5. [ ] **VRP sleeve (`--vrp-sleeve`).** Re-architect `vrp_data.py` as a fixed 5%
+   risk-budget sleeve *outside* the core IDM, long/short vol on VIX term-structure
+   slope, hard-capped, challenger-book only. Expected +0.05–0.10 but most dangerous.
+
+---
+
 ## Tier A — forward-validate the edge (paper deploy + reconcile) — THE next step
 
 The engine is validated in-sample + walk-forward but has seen **NO forward data**. Closing

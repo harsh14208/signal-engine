@@ -75,6 +75,29 @@ OPTION_PACK_INSTRUMENTS: tuple[Instrument, ...] = (
     Instrument("AMLP", "MLPs / energy infrastructure", "commodity", cost_bps=2.5),
 )
 
+# Curated breadth pack: low-correlation additions chosen by pairwise correlation to
+# the core book, not by asset-class count.  Kept separate from EXPANDED_UNIVERSE
+# because the full expanded set failed walk-forward (too many correlated betas).
+CURATION_BREADTH_INSTRUMENTS: tuple[Instrument, ...] = (
+    Instrument("UNG", "Natural gas", "commodity", cost_bps=3.0),
+    Instrument("CPER", "Copper", "commodity", cost_bps=2.5),
+    Instrument("CORN", "Corn", "commodity", cost_bps=3.0),
+    Instrument("WEAT", "Wheat", "commodity", cost_bps=3.0),
+    Instrument("SOYB", "Soybeans", "commodity", cost_bps=3.0),
+    Instrument("EMB", "USD emerging-market bonds", "bond", cost_bps=2.5),
+    Instrument("BWX", "Intl Treasury", "bond", cost_bps=2.0),
+    Instrument("FXA", "Australian dollar", "fx"),
+    Instrument("FXB", "British pound", "fx"),
+    Instrument("FXC", "Canadian dollar", "fx"),
+)
+
+# Crypto pack: genuinely uncorrelated to traditional asset classes, but shorter
+# history and very high vol.  Added as an opt-in pack only.
+CRYPTO_INSTRUMENTS: tuple[Instrument, ...] = (
+    Instrument("BTC-USD", "Bitcoin", "crypto", cost_bps=10.0),
+    Instrument("ETH-USD", "Ethereum", "crypto", cost_bps=15.0),
+)
+
 # Expanded free-ETF universe. Thin/young ETFs are automatically filtered by the
 # >300-bar rule in data.load_prices, so adding candidates is cheap.
 EXPANDED_UNIVERSE: tuple[Instrument, ...] = UNIVERSE + OPTION_PACK_INSTRUMENTS + (
@@ -128,11 +151,14 @@ SYNTHETIC_INSTRUMENTS: tuple[Instrument, ...] = (
     ),
 )
 
+ALL_TRADABLE_INSTRUMENTS: tuple[Instrument, ...] = (
+    UNIVERSE + OPTION_PACK_INSTRUMENTS + CURATION_BREADTH_INSTRUMENTS + CRYPTO_INSTRUMENTS
+)
 BY_SYMBOL: dict[str, Instrument] = {
-    i.symbol: i for i in UNIVERSE + SYNTHETIC_INSTRUMENTS + OPTION_PACK_INSTRUMENTS
+    i.symbol: i for i in ALL_TRADABLE_INSTRUMENTS + SYNTHETIC_INSTRUMENTS
 }
 BY_SYMBOL_EXPANDED: dict[str, Instrument] = {
-    i.symbol: i for i in EXPANDED_UNIVERSE + SYNTHETIC_INSTRUMENTS
+    i.symbol: i for i in EXPANDED_UNIVERSE + CURATION_BREADTH_INSTRUMENTS + CRYPTO_INSTRUMENTS + SYNTHETIC_INSTRUMENTS
 }
 
 

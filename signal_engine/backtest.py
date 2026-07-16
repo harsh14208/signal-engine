@@ -31,6 +31,7 @@ from .forecast import (
 from .markets import cost_per_symbol, instrument_for
 from .portfolio import (
     apply_buffer,
+    apply_crypto_risk_cap,
     corr_spike_overlay,
     drawdown_overlay,
     estimate_idm,
@@ -272,6 +273,9 @@ def _execute_backtest(
             for sym in symbols
         }
     )
+
+    # Crypto risk cap: prevent any single crypto instrument from dominating IDM.
+    raw_units = apply_crypto_risk_cap(raw_units, prices, annual_vol, config)
 
     # Trend-strength filter: de-gear when combined forecasts are historically weak.
     ts_overlay = pd.Series(1.0, index=index)

@@ -132,6 +132,11 @@ def build_config(args) -> Config:
         trend_strength_window=args.trend_strength_window,
         trend_strength_threshold=args.trend_strength_threshold,
         trend_strength_scale=args.trend_strength_scale,
+        use_crypto=args.use_crypto,
+        crypto_max_risk_weight=(
+            args.crypto_max_risk_weight if args.crypto_max_risk_weight is not None else 0.05
+        ),
+        use_curated_breadth=args.use_curated_breadth,
         use_garch_vol=args.use_garch_vol,
         garch_weight=args.garch_weight,
         garch_min_history=args.garch_min_history,
@@ -296,6 +301,13 @@ def _build_symbol_list(args) -> tuple[list[str], str]:
         pack_additions += ["BNDX", "PFF", "AMLP", "MUB", "EMLC"]
     if args.rate_pack:
         pack_additions += ["BNDX", "MUB"]
+    if args.use_crypto:
+        pack_additions += ["BTC-USD", "ETH-USD"]
+    if args.use_curated_breadth:
+        pack_additions += [
+            "UNG", "CPER", "CORN", "WEAT", "SOYB",
+            "EMB", "BWX", "FXA", "FXB", "FXC",
+        ]
     if pack_additions:
         seen = set(syms)
         syms = syms + [s for s in pack_additions if s not in seen]
@@ -751,6 +763,25 @@ def main(argv=None) -> int:
         "--qqq",
         action="store_true",
         help="add QQQ (Nasdaq-100) to the universe",
+    )
+    p.add_argument(
+        "--crypto",
+        action="store_true",
+        dest="use_crypto",
+        help="add BTC-USD and ETH-USD to the universe (opt-in; high vol, short history)",
+    )
+    p.add_argument(
+        "--crypto-max-risk-weight",
+        type=float,
+        default=None,
+        dest="crypto_max_risk_weight",
+        help="max portfolio risk contribution per crypto instrument (default 0.05)",
+    )
+    p.add_argument(
+        "--curated-breadth",
+        action="store_true",
+        dest="use_curated_breadth",
+        help="add correlation-selected breadth instruments (UNG/CPER/CORN/WEAT/SOYB/EMB/BWX/FXA/FXB/FXC)",
     )
     p.add_argument(
         "--diversifier-pack",

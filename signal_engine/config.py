@@ -202,6 +202,18 @@ class Config:
     trend_strength_threshold: float = 0.25  # bottom quartile
     trend_strength_scale: float = 0.70      # scale positions to 70% when weak
 
+    # Crypto pack (opt-in). BTC + ETH via yfinance.  High vol, short history,
+    # low correlation to traditional assets.  `crypto_max_risk_weight` caps the
+    # portfolio-level risk contribution of any single crypto instrument so it
+    # cannot dominate the IDM.
+    use_crypto: bool = False
+    crypto_max_risk_weight: float = 0.05  # max risk contribution per crypto symbol
+
+    # Curated breadth pack (opt-in). Correlation-selected additions to the core
+    # universe (commodities, EM/intl bonds, FX) — a salvage of the failed
+    # --expanded-universe test, which added too many correlated equity betas.
+    use_curated_breadth: bool = False
+
     def __post_init__(self):
         # Backward compatibility: the old boolean flag overrides the scheme.
         if self.cluster_weights and self.weight_scheme == "equal":
@@ -243,6 +255,8 @@ class Config:
             f"cost={self.cost_bps}bps scheme={self.cost_scheme}",
             f"buffer={self.buffer_fraction:.0%} weights={weight}",
             f"universe={'expanded' if self.use_expanded_universe else 'core'}",
+            f"crypto={'on' if self.use_crypto else 'off'}",
+            f"curated_breadth={'on' if self.use_curated_breadth else 'off'}",
             f"governor={'on' if self.use_governor else 'off'}{smooth}",
             f"regime={'on' if self.use_regime_overlay else 'off'}{regime_smooth}",
             f"vix_term={vix_term}{vix_term_smooth}",

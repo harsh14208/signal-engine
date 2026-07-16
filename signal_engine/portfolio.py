@@ -60,6 +60,43 @@ def position_units(
     return units.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 
+def apply_crypto_risk_cap(
+    units: pd.DataFrame,
+    prices: pd.DataFrame,
+    annual_return_vols: pd.DataFrame,
+    config,
+) -> pd.DataFrame:
+    """Scale crypto positions so no single crypto instrument exceeds the configured
+    fraction of portfolio risk target.
+
+    The cap is applied to standalone dollar risk (|units|·price·σ_annual) as a
+    fraction of the portfolio risk budget (capital·vol_target).  This is a
+    conservative, causal guard; it does not account for diversification, but it
+    prevents a single high-vol crypto name from dominating the book.
+    """
+    if not config.use_crypto or config.crypto_max_risk_weight is None:
+        return units
+    from .markets import instrument_for
+
+    out = units.copy()
+    budget = config.capital * config.vol_target
+    if budget <= 0:
+        return out
+    for sym in units.columns:
+        inst = instrument_for(sym)
+        if inst is None or inst.asset_class != "crypto":
+            continue
+        risk = (out[sym].abs() * prices[sym] * inst.multiplier * annual_return_vols[sym]).abs()
+        frac = risk / budget
+        above = frac > config.crypto_max_risk_weight
+        if above.any():
+            scale = pd.Series(np.where(above, config.crypto_max_risk_weight / frac, 1.0), index=units.index)
+            # Forward-fill scale so a cap, once applied, doesn't flip back and forth
+            # on noise; only relax when the unconstrained position would be below cap.
+            out[sym] = out[sym] * scale
+    return out
+
+
 def apply_buffer(units: pd.Series, fraction: float) -> pd.Series:
     """No-trade buffer to cut turnover: only move to the new target when it is
     more than `fraction` × (typical position size) away from the current hold.
