@@ -186,6 +186,71 @@ def load_equity_carry(
     return carry.reindex(prices.index).fillna(0.0)
 
 
+# FX currency → FRED short-rate series. 3-month interbank rates are the classic
+# FX carry signal; they are monthly, so we forward-fill to daily.
+_FX_CURRENCY_RATES: dict[str, tuple[str, ...]] = {
+    "USD": ("DGS3MO", "IR3TIB01USM156N"),
+    "EUR": ("IR3TIB01EZM156N", "ECBDFR"),
+    "JPY": ("IR3TIB01JPM156N",),
+    "GBP": ("IR3TIB01GBM156N",),
+    "AUD": ("IR3TIB01AUM156N",),
+    "CAD": ("IR3TIB01CAM156N",),
+}
+
+# FX ETF → currency longed by the ETF (vs USD).
+_FX_ETF_CURRENCY: dict[str, str] = {
+    "FXE": "EUR",
+    "FXY": "JPY",
+    "FXA": "AUD",
+    "FXB": "GBP",
+    "FXC": "CAD",
+    "UUP": "USD",
+}
+
+
+def _load_fx_rate(currency: str, start: str, end: str) -> pd.Series:
+    """Fetch the best available short-rate series for a currency."""
+    for series_id in _FX_CURRENCY_RATES[currency]:
+        try:
+            s = _fred_series(series_id).dropna() / 100.0
+            if not s.empty:
+                s.name = f"{currency}_rate"
+                idx = pd.bdate_range(start=pd.Timestamp(start), end=pd.Timestamp(end))
+                return s.reindex(idx, method="ffill").ffill().bfill()
+        except Exception:
+            continue
+    raise RuntimeError(f"Could not fetch any rate series for {currency}")
+
+
+def load_fx_carry(prices: pd.DataFrame) -> pd.DataFrame:
+    """Rate-differential carry for FX ETFs, aligned to `prices`.
+
+    Carry = foreign_short_rate - usd_short_rate, expressed as a decimal annual
+    return.  For UUP (USD long vs a basket) we use USD - mean(available foreign).
+    """
+    start = prices.index.min().strftime("%Y-%m-%d")
+    end = prices.index.max().strftime("%Y-%m-%d")
+    idx = prices.index
+
+    rates: dict[str, pd.Series] = {}
+    for currency in set(_FX_ETF_CURRENCY.values()):
+        rates[currency] = _load_fx_rate(currency, start, end).reindex(idx).ffill()
+
+    usd_rate = rates["USD"]
+    foreign_avg = pd.DataFrame([rates[c] for c in rates if c != "USD"]).T.mean(axis=1)
+
+    out = pd.DataFrame(0.0, index=idx, columns=prices.columns)
+    for sym in prices.columns:
+        currency = _FX_ETF_CURRENCY.get(sym)
+        if currency is None:
+            continue
+        if currency == "USD":
+            out[sym] = usd_rate - foreign_avg
+        else:
+            out[sym] = rates[currency] - usd_rate
+    return out
+
+
 def build_carry_panel(prices: pd.DataFrame, config: Config | None = None) -> pd.DataFrame:
     """Assemble a carry DataFrame aligned with `prices`.
 
@@ -227,5 +292,12 @@ def build_carry_panel(prices: pd.DataFrame, config: Config | None = None) -> pd.
     if equity_syms:
         equity_carry = load_equity_carry(equity_syms, prices, start, end)
         out[equity_syms] = equity_carry.values
+
+    if getattr(config, "use_fx_carry", False):
+        fx_carry = load_fx_carry(prices)
+        # FX carry replaces any dividend-yield carry for FX ETFs.
+        fx_syms = [s for s in symbols if s in _FX_ETF_CURRENCY]
+        if fx_syms:
+            out[fx_syms] = fx_carry[fx_syms].values
 
     return out

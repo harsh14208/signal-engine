@@ -122,6 +122,7 @@ def purged_walk_forward(
     config: Config,
     n_splits: int = 5,
     embargo_frac: float = 0.02,
+    carry: pd.DataFrame | None = None,
     cot: pd.DataFrame | None = None,
 ) -> dict:
     """Expanding-window walk-forward with a small embargo gap between train/test.
@@ -152,16 +153,19 @@ def purged_walk_forward(
 
         train = prices.iloc[:train_end]
         test = prices.iloc[test_start:test_end]
+        carry_train = carry.iloc[:train_end] if carry is not None else None
+        carry_test = carry.iloc[test_start:test_end] if carry is not None else None
         cot_train = cot.iloc[:train_end] if cot is not None else None
         cot_test = cot.iloc[test_start:test_end] if cot is not None else None
 
-        train_result = run_backtest(train, config, cot=cot_train)
+        train_result = run_backtest(train, config, carry=carry_train, cot=cot_train)
         test_result = run_backtest_with_params(
             test,
             config,
             train_result.weights,
             train_result.idm,
             train_result.fdm,
+            carry=carry_test,
             cot=cot_test,
         )
 
@@ -233,6 +237,7 @@ def combinatorial_purged_cv(
     n_groups: int = 6,
     k_test: int = 2,
     embargo_frac: float = 0.02,
+    carry: pd.DataFrame | None = None,
     cot: pd.DataFrame | None = None,
 ) -> dict:
     """Combinatorial Purged Cross-Validation (López de Prado) for one strategy.
@@ -280,16 +285,19 @@ def combinatorial_purged_cv(
 
         train = prices.iloc[train_mask]
         test = prices.iloc[test_mask]
+        carry_train = carry.iloc[train_mask] if carry is not None else None
+        carry_test = carry.iloc[test_mask] if carry is not None else None
         cot_train = cot.iloc[train_mask] if cot is not None else None
         cot_test = cot.iloc[test_mask] if cot is not None else None
 
-        train_result = run_backtest(train, config, cot=cot_train)
+        train_result = run_backtest(train, config, carry=carry_train, cot=cot_train)
         test_result = run_backtest_with_params(
             test,
             config,
             train_result.weights,
             train_result.idm,
             train_result.fdm,
+            carry=carry_test,
             cot=cot_test,
         )
         paths.append(
@@ -375,6 +383,15 @@ def probability_backtest_overfitting(returns: pd.DataFrame, n_splits: int = 10) 
 # The parent engine failed its own Deflated Sharpe once the *real* trial count was
 # used.  The fix is to never hand-set n_trials: every config ever evaluated writes
 # a fingerprint, and the deflation reads the registry length.
+#
+# Two logs exist for historical reasons:
+#   • trial_registry.jsonl — fingerprints from explicit register_trial() calls.
+#   • experiments.jsonl     — auto-logged from eval scripts and the CLI.
+# honest_n_trials() unions the two sources and deduplicates by *effective* Config
+# so the bar reflects the true number of distinct strategies searched.
+
+
+DEFAULT_EXPERIMENT_REGISTRY = _DATA_DIR / "experiments.jsonl"
 
 
 def config_fingerprint(config: Config) -> str:
@@ -408,13 +425,56 @@ def _registry_fingerprints(path: Path) -> set[str]:
     out = set()
     for line in Path(path).read_text().splitlines():
         if line.strip():
-            out.add(json.loads(line)["fingerprint"])
+            try:
+                out.add(json.loads(line)["fingerprint"])
+            except (json.JSONDecodeError, KeyError):
+                continue
     return out
 
 
-def honest_n_trials(path: Path | str = DEFAULT_TRIAL_REGISTRY, floor: int = 1) -> int:
-    """Number of distinct configs in the registry (the trial count to deflate by)."""
-    return max(floor, len(_registry_fingerprints(Path(path))))
+def _experiment_fingerprints(path: Path) -> set[str]:
+    """Distinct effective Config fingerprints from the experiment JSONL log.
+
+    Recomputes the fingerprint after round-tripping through Config so that schema
+    drift (extra/missing keys) and default-valued fields do not inflate the count.
+    """
+    seen: set[str] = set()
+    if not path.exists():
+        return seen
+    valid_keys = frozenset(Config.__dataclass_fields__)
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        cfg_dict = record.get("config")
+        if not isinstance(cfg_dict, dict):
+            continue
+        filtered = {k: v for k, v in cfg_dict.items() if k in valid_keys}
+        try:
+            cfg = Config(**filtered)
+        except Exception:
+            continue
+        seen.add(config_fingerprint(cfg))
+    return seen
+
+
+def honest_n_trials(
+    path: Path | str = DEFAULT_TRIAL_REGISTRY,
+    floor: int = 1,
+    *,
+    experiment_path: Path | str = DEFAULT_EXPERIMENT_REGISTRY,
+) -> int:
+    """Number of distinct configs searched across registry and experiment log.
+
+    The experiment log is the canonical source for eval-script runs; the registry
+    remains for backward compatibility.  Both are deduplicated by effective Config.
+    """
+    registry = _registry_fingerprints(Path(path))
+    experiments = _experiment_fingerprints(Path(experiment_path))
+    return max(floor, len(registry | experiments))
 
 
 def assert_no_lookahead(

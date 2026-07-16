@@ -47,14 +47,15 @@ low-strength regime that can be timed in-sample. See `docs/OPTIMIZATIONS.md`.
 ```
 H1 clears_noise:    net 0.74 vs noise-floor 0.40   ✅
 H2 edge_real:       bootstrap P5 0.46 > 0          ✅
-H3 passes_deflated: net 0.74 vs deflated-max 0.58  ✅  (clears by 0.16, not 0.02)
+H3 passes_deflated: net 0.74 vs deflated-max 0.60  ✅  (clears by 0.14 at honest n_trials=141)
 R1 cpcv_robust:     OOS P5 0.39, 0% paths<0        ✅
 R2 walk_forward_ok: OOS 0.72, gap -0.00            ✅  (~zero IS/OOS degradation)
 R3 cost_headroom:   net positive past 25bps        ✅
 effective bets 13.9 / 19
 ```
-The longer window lowers the deflated bar (more statistical power: N=6921 vs 4901),
-so H3 clears far more comfortably than on the 2007–26 window (0.71 vs 0.69).
+The longer window lowers the deflated bar (more statistical power: N≈6921 vs ≈4901),
+so H3 clears far more comfortably than on the 2007–26 window, where the corrected
+trial count flips H3 to FAIL (0.69 vs deflated-max ≈0.72).
 
 ## The honest synthesis
 1. **Robust in-sample:** 0.74 over 27 years, near-zero walk-forward gap, genuine

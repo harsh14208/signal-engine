@@ -65,14 +65,14 @@ class TestTrialRegistry:
         register_trial(Config(), label="a", path=reg)
         register_trial(Config(), label="a-again", path=reg)  # same config → no-op
         register_trial(Config(use_cot=True), label="b", path=reg)
-        assert honest_n_trials(reg) == 2
+        assert honest_n_trials(reg, experiment_path=tmp_path / "no_experiments.jsonl") == 2
 
     def test_fingerprint_stable_and_distinct(self):
         assert config_fingerprint(Config()) == config_fingerprint(Config())
         assert config_fingerprint(Config()) != config_fingerprint(Config(vol_target=0.15))
 
     def test_empty_registry_floor(self, tmp_path):
-        assert honest_n_trials(tmp_path / "none.jsonl") == 1
+        assert honest_n_trials(tmp_path / "none.jsonl", experiment_path=tmp_path / "no_experiments.jsonl") == 1
 
 
 class TestLookaheadGuard:

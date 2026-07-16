@@ -150,6 +150,7 @@ def _args(**kwargs) -> object:
         "use_crypto": False,
         "crypto_max_risk_weight": 0.05,
         "use_curated_breadth": False,
+        "use_fx_carry": False,
     }
     defaults.update(kwargs)
     return type("Args", (), defaults)()

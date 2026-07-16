@@ -23,7 +23,9 @@ Exit codes: `0=PASS`, `1=CONDITIONAL`, `2=FAIL`, `3=error`. Pre-registered gates
 Any hard failure ⇒ **FAIL**. Hard-pass but a robustness failure ⇒ **CONDITIONAL**.
 All pass ⇒ **PASS**. ENB and the live forward track are reported as context.
 
-### Verdict on real cached data (2026-07-09): ✅ PASS — but H3 is razor-thin
+### Verdict on real cached data (2026-07-09): ❌ H3 FAIL after correcting the trial count
+
+The original run reported a razor-thin PASS:
 
 ```
 H1 clears_noise:    net 0.71 vs noise-floor 0.40   ✅
@@ -35,17 +37,27 @@ R3 cost_headroom:   net Sharpe positive past 25bps ✅
 effective bets 12.9 / 19
 ```
 
-**Read this honestly:** the edge passes, but H3 (0.71 vs 0.69 at 100 trials) is the
-exact margin the parent engine *failed*. Two caveats gate the "PASS":
-1. It is measured on **ETF proxies with proxy carry**, not real futures.
-2. The deflation used a floored 100-trial prior. As the trial registry grows
-   (every `validate_edge` run and experiment registers one), the honest trial
-   count rises and the deflated-max threshold with it — this could flip H3 to FAIL.
-   That is the point: the gate makes the fragility visible instead of hiding it.
+**Updated read (2026-07-15):** the trial counter was undercounting.
+`trial_registry.jsonl` held 15 fingerprints while the actual search log
+`experiments.jsonl` held 153 raw config hashes. `validation.honest_n_trials()` now
+unions both sources and deduplicates by effective Config, giving **141 distinct
+strategies searched**. At that count the Deflated-Sharpe bar rises to ≈**0.72**, and
+the baseline net Sharpe of **0.69 fails H3**.
 
-**Conclusion:** enough of a signal to justify Phase 1+ investment, *conditional on*
-(a) confirming on real-futures data and (b) accruing a live forward track. Do not
-treat PASS as "the edge is proven."
+| n_trials | Deflated max | Baseline 0.69 passes? |
+|---:|---:|:---|
+| 15 (stale registry) | 0.53 | ✅ |
+| 100 (prior floor) | 0.69 | ❌ |
+| 141 (honest count) | 0.72 | ❌ |
+
+This is the parent engine's failure signature reproduced in real time: every null
+backtest raises the bar on the same edge. The gate is doing its job — it makes the
+fragility visible instead of hiding it.
+
+**Conclusion:** backtest evidence alone can no longer certify the edge. The default
+engine remains the best backtested candidate, but promotion now depends on the
+accruing forward track (`data/live_returns.csv`) via the champion/challenger
+lifecycle, not on further backtests.
 
 ## Phase 1 — realized-friction calibration
 

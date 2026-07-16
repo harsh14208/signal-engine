@@ -2,7 +2,7 @@
 
 Date: 2026-07-10 23:45 UTC
 Data: real ETF-proxy prices (cache), 2007–2026.
-Validation: 70/30 chronological OOS, random-walk placebo (n=12), Deflated Sharpe at the **honest** trial count (n_trials=100, from the registry — not a hardcoded 100), block-bootstrap, and PBO across the search.
+Validation: 70/30 chronological OOS, random-walk placebo (n=12), Deflated Sharpe at the **honest** trial count (n_trials=141, from the union of `trial_registry.jsonl` and `experiments.jsonl` — not a hardcoded 100), block-bootstrap, and PBO across the search. Baseline Net SR 0.69 fails H3 at this count.
 
 ## Summary table
 
@@ -37,9 +37,19 @@ Validation: 70/30 chronological OOS, random-walk placebo (n=12), Deflated Sharpe
 
 ## Honesty — overfitting at the real trial count
 
-- Deflated-Sharpe bar uses n_trials=100 = max(registry=15, floor=100). The registry undercounts historical search, so a conservative floor holds the bar up; it rises as the registry grows. Deflated-max ≈ 0.69.
-- ⚠ Runs that do **not** clear Deflated Sharpe at n_trials=100: baseline, empirical_scalars, regime_overlay, scalars+regime. A thin margin here is the parent engine's failure mode.
-- Probability of Backtest Overfitting (CSCV over 14 configs): **0.80** (⚠ OVERFIT). >0.5 means the IS-best config is below the OOS median more often than chance.
+- Deflated-Sharpe bar uses the honest trial count. The original `trial_registry.jsonl`
+  held only 15 fingerprints while the actual search log `experiments.jsonl` held 153
+  raw config hashes. `validation.honest_n_trials()` now unions both sources and
+  deduplicates by *effective Config*, giving **141 distinct strategies searched**.
+- At n_trials=141 and ≈4,914 daily observations, the Deflated-Sharpe expected-max
+  bar is ≈**0.72**. The baseline net Sharpe of **0.69 does NOT clear H3**.
+- This is the parent engine's failure signature in real time: every null backtest
+  raises the bar on the same edge. Backtest-only certification is exhausted; the
+  edge must now be confirmed by the forward track.
+- ⚠ Runs that did **not** clear Deflated Sharpe at the previous floor (n_trials=100,
+  bar ≈0.69): baseline, empirical_scalars, regime_overlay, scalars+regime.
+- Probability of Backtest Overfitting (CSCV over 14 configs): **0.80** (⚠ OVERFIT).
+  >0.5 means the IS-best config is below the OOS median more often than chance.
 
 ---
 

@@ -137,6 +137,7 @@ def build_config(args) -> Config:
             args.crypto_max_risk_weight if args.crypto_max_risk_weight is not None else 0.05
         ),
         use_curated_breadth=args.use_curated_breadth,
+        use_fx_carry=args.use_fx_carry,
         use_garch_vol=args.use_garch_vol,
         garch_weight=args.garch_weight,
         garch_min_history=args.garch_min_history,
@@ -224,8 +225,8 @@ def _print_oos(result, frac: float) -> None:
     print(f"- Curation gap (IS − OOS): **{gap:+.2f}** ({flag})")
 
 
-def _print_walk_forward(prices, cfg, n_splits: int, cot=None) -> None:
-    wf = purged_walk_forward(prices, cfg, n_splits=n_splits, cot=cot)
+def _print_walk_forward(prices, cfg, n_splits: int, carry=None, cot=None) -> None:
+    wf = purged_walk_forward(prices, cfg, n_splits=n_splits, carry=carry, cot=cot)
     print("\n## Walk-forward / purged CV\n")
     if wf.get("insufficient"):
         print("- Insufficient data for walk-forward analysis.")
@@ -453,7 +454,7 @@ def run(args) -> int:
     if args.oos:
         _print_oos(result, args.oos)
     if args.walk_forward:
-        _print_walk_forward(prices, cfg, args.walk_forward, cot=cot)
+        _print_walk_forward(prices, cfg, args.walk_forward, carry=carry, cot=cot)
     if args.diagnostics:
         _print_diagnostics(prices, result, cfg)
     if args.monitor:
@@ -782,6 +783,12 @@ def main(argv=None) -> int:
         action="store_true",
         dest="use_curated_breadth",
         help="add correlation-selected breadth instruments (UNG/CPER/CORN/WEAT/SOYB/EMB/BWX/FXA/FXB/FXC)",
+    )
+    p.add_argument(
+        "--fx-carry",
+        action="store_true",
+        dest="use_fx_carry",
+        help="use FRED rate-differential carry for FX ETFs instead of dividend yield",
     )
     p.add_argument(
         "--diversifier-pack",

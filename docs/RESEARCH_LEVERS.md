@@ -110,7 +110,7 @@ The regime literature's flagged failure mode is using **smoothed** HMM probabili
 |---|---|---|---|
 | CPCV | `validation.combinatorial_purged_cv(prices, cfg, n_groups, k_test)` | returns OOS-Sharpe distribution + `pct_paths_below_zero` | shipped |
 | PBO | `validation.probability_backtest_overfitting(returns_matrix)` | pass a T×N panel of candidate-config returns → `pbo` | shipped |
-| Honest n_trials | `validation.register_trial(cfg)` / `honest_n_trials()` | fingerprints to `data/trial_registry.jsonl`; feed to Deflated Sharpe | shipped |
+| Honest n_trials | `validation.register_trial(cfg)` / `honest_n_trials()` | unions `data/trial_registry.jsonl` and `data/experiments.jsonl`, deduplicates by effective Config | shipped, corrected 2026-07-15 |
 | Lookahead guard | `validation.assert_no_lookahead(fn, data)` | raises if history changes when the tail is revealed | shipped |
 | Effective bets | `diagnostics.effective_number_of_bets(returns)` / `diversification_audit(result)` | ENB + `idm_vs_effective` | shipped |
 | Network momentum | `Config(use_network_momentum=True)` / `--network-momentum` | new price-only rule wired through FDM | **VALIDATED-POSITIVE** |

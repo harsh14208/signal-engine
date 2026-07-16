@@ -1,23 +1,39 @@
 # signal-engine — next best items
 
 **Status (2026-07-15):** real-data (2007–2026, 19 ETF proxies) net Sharpe **0.69**,
-MaxDD −38%, vol on target (21.4%); clears placebo + Lo CI, and now **clears Deflated
-Sharpe at the honest trial count**. The honest read is the **4-fold walk-forward**
-(mean OOS **0.61**, gap +0.12), NOT the single 70/30 split (OOS 0.55).
-Validated wins: realised-vol **governor**, **30% position buffer**, **`--cot`**,
-**`--semis`**, **`--qqq`**, and **`--network-momentum`**. 🟢 **NEW — financing /
-leverage-cost model** (`--financing-rate`, `--financing-threshold`, `--max-gross`)
-so bond-pack additions are compared on a like-for-like cost basis. 🟢 **NEW — six
-research/patent optimizations implemented as opt-in diagnostics**: drift
-decomposition, warm-up parity, quartile edge-decay, calibration smoothing, drawdown
-control, and trend-strength filter. **None improved walk-forward OOS Sharpe versus
-the financed baseline**, so they remain research flags. Confirmed dead-ends /
-opt-in only: **asset-class cluster weighting**, **VIX term-structure overlay**,
-**Baa-10Y credit-spread overlay**, **GARCH vol sizing**, **HMM regime overlay**,
-**S&P 500 x-sectional momentum sleeve**, **VRP injection (detonated vol-targeting —
-parked)**, **drawdown control**, **trend-strength filter**, **calibration smoothing**.
+MaxDD −38%, vol on target (21.4%); clears placebo + Lo CI, and block-bootstrap edge
+is real. **H3 (Deflated Sharpe) now FAILS at the honest trial count**: the registry
+mechanism was undercounting — `trial_registry.jsonl` held 15 entries while the actual
+search log `experiments.jsonl` holds 153 unique configs. At the corrected count
+(`honest_n_trials()` = **141** distinct effective configs) the Deflated-Sharpe bar is
+≈**0.72**, above the baseline net Sharpe of 0.69. This is the parent project's failure
+signature: every null backtest raises the bar on the same edge. The honest read is the
+**4-fold walk-forward** (mean OOS **0.61**, gap +0.12), NOT the single 70/30 split
+(OOS 0.55).
+
+Validated wins (backtest-only, now awaiting forward confirmation): realised-vol
+**governor**, **30% position buffer**, **`--cot`**, **`--semis`**, **`--qqq`**, and
+**`--network-momentum`**. 🟢 **NEW — financing / leverage-cost model**
+(`--financing-rate`, `--financing-threshold`, `--max-gross`) so bond-pack additions
+are compared on a like-for-like cost basis. 🟢 **NEW — six research/patent
+optimizations implemented as opt-in diagnostics**: drift decomposition, warm-up
+parity, quartile edge-decay, calibration smoothing, drawdown control, and
+trend-strength filter. **None improved walk-forward OOS Sharpe versus the financed
+baseline**, so they remain research flags. Confirmed dead-ends / opt-in only:
+**asset-class cluster weighting**, **VIX term-structure overlay**, **Baa-10Y
+credit-spread overlay**, **GARCH vol sizing**, **HMM regime overlay**, **S&P 500
+x-sectional momentum sleeve**, **VRP injection (detonated vol-targeting — parked)**,
+**drawdown control**, **trend-strength filter**, **calibration smoothing**.
 ⚠ **`--ship-candidate` is NOT promoted** — single-split false dawn. The validated
 default remains **core 19 + governor + 30% buffer**.
+
+🔴 **Research moratorium (2026-07-15): free signal search is halted.** Backtest-only
+certification is exhausted: H3 fails, and every additional config evaluated makes it
+fail harder. New levers will be judged by the forward track (`data/live_returns.csv`)
+using the champion/challenger lifecycle, not by further backtests. The remaining free
+levers (energy spot carry, VRP sleeve) are parked until the forward book is long
+enough to carry certification weight — or until the futures feed adds genuine premia
+rather than more trials.
 
 Rule for everything below: **each new lever must beat the random-walk placebo and
 survive an honest OOS split before it ships.** That discipline — not cleverness —
@@ -162,23 +178,37 @@ futures feed. All evaluated under the honest 3× gross cap + 1% financing bar.
    directionally negative but statistically indistinguishable from baseline
    (delta −0.129, 95% CI [−0.221, +0.023]). Left as a research flag.
 
-### Phase 2 — FX carry from FRED rate differentials (next)
+### Phase 2 — FX carry from FRED rate differentials (implemented, inert)
 
-3. [ ] **FX carry (`--fx-carry`).** Use free FRED policy/short rates to compute
-   rate differentials vs USD and apply them to FX ETFs (FXE/FXY/UUP + FXA/FXB/FXC).
-   Expected +0.05–0.10 Sharpe.
+3. [x] **FX carry (`--fx-carry`).** FRED-based rate differentials vs USD are wired
+   into the carry panel for FX ETFs (FXE/FXY/UUP + FXA/FXB/FXC) with monthly
+   forward-fill fallbacks. **Result:** the signal is not dead, but the walk-forward
+   improvement is statistically indistinguishable from baseline:
 
-### Phase 3 — spot commodity carry (next)
+   | Configuration | Net SR | WF OOS SR | Promotion |
+   |---|---:|---:|---|
+   | baseline | 0.538 | 0.493 | — |
+   | +carry-proxies | 0.534 | 0.501 | HOLD (delta +0.008, CI [−0.011, +0.025]) |
+   | +fx-carry | 0.509 | 0.499 | HOLD (delta +0.006, CI [−0.027, +0.025]) |
+
+   Left as an opt-in research flag. A paid futures feed with term-structure carry
+   would be the honest next step for this lever.
+
+### Phase 3 — spot commodity carry (parked under moratorium)
 
 4. [ ] **Spot roll-yield carry (`--spot-carry`).** Use EIA WTI/Henry Hub spot and
    LBMA gold/silver fixes (or yfinance proxies) to compute realized roll-yield
-   signals for USO/UNG/GLD/SLV. Expected +0.03–0.08.
+   signals for USO/UNG/GLD/SLV. Expected +0.03–0.08. **Parked**: implementing and
+   backtesting this would add trials to an already-failing Deflated-Sharpe bar.
+   It can be revisited from the forward track or after the futures feed arrives.
 
-### Phase 4 — VRP risk-capped sleeve (last)
+### Phase 4 — VRP risk-capped sleeve (parked under moratorium)
 
 5. [ ] **VRP sleeve (`--vrp-sleeve`).** Re-architect `vrp_data.py` as a fixed 5%
    risk-budget sleeve *outside* the core IDM, long/short vol on VIX term-structure
    slope, hard-capped, challenger-book only. Expected +0.05–0.10 but most dangerous.
+   **Parked**: high variance + additional trials makes this a forward-track or
+   paid-data project only.
 
 ---
 

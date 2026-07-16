@@ -214,6 +214,11 @@ class Config:
     # --expanded-universe test, which added too many correlated equity betas.
     use_curated_breadth: bool = False
 
+    # FX carry from FRED rate differentials (opt-in). Replaces the dividend-yield
+    # proxy for FX ETFs with (foreign_short_rate - usd_short_rate), the classic
+    # free FX carry signal.
+    use_fx_carry: bool = False
+
     def __post_init__(self):
         # Backward compatibility: the old boolean flag overrides the scheme.
         if self.cluster_weights and self.weight_scheme == "equal":
@@ -257,6 +262,7 @@ class Config:
             f"universe={'expanded' if self.use_expanded_universe else 'core'}",
             f"crypto={'on' if self.use_crypto else 'off'}",
             f"curated_breadth={'on' if self.use_curated_breadth else 'off'}",
+            f"fx_carry={'on' if self.use_fx_carry else 'off'}",
             f"governor={'on' if self.use_governor else 'off'}{smooth}",
             f"regime={'on' if self.use_regime_overlay else 'off'}{regime_smooth}",
             f"vix_term={vix_term}{vix_term_smooth}",

@@ -28,12 +28,17 @@ no-trade buffer, trend-only.
 | Lo 95% CI | [0.23, 1.13] — SR=0 outside ✅ |
 | Block-bootstrap P5 | 0.34 > 0 ✅ |
 | Random-walk placebo | clears ✅ |
-| Deflated Sharpe (honest trial count) | clears ✅ |
+| Deflated Sharpe (honest trial count) | **FAILS** ❌ at n_trials=141; bar ≈0.72 vs net 0.69 |
 | 4-fold purged walk-forward mean OOS | **0.61**, gap +0.12 |
 
 ---
 
-## 3. Validated-positive levers (cleared walk-forward OOS)
+## 3. Validated-positive levers (cleared walk-forward OOS, pending forward confirmation)
+
+These levers improved walk-forward OOS Sharpe in backtest, but the corrected trial
+count means **H3 (Deflated Sharpe) fails for the default config**. Backtest-based
+promotion is therefore suspended; the levers remain candidates awaiting confirmation
+from the forward track.
 
 | Lever | Effect | Status |
 |---|---|---|
@@ -135,16 +140,22 @@ because the first OOS check already failed.
 
 ## 8. Honest validation battery
 
-### Phase 0 edge gate (2007–2026): ✅ PASS — razor-thin
+### Phase 0 edge gate (2007–2026): ❌ H3 FAIL after trial-count correction
 
 | Gate | Result |
 |---|---|
 | H1 clears_noise | net 0.71 vs noise-floor 0.40 ✅ |
 | H2 edge_real | bootstrap P5 0.38 > 0 ✅ |
-| H3 passes_deflated | net 0.71 vs deflated-max 0.69 ✅ (clears by 0.02) |
+| H3 passes_deflated | **net 0.69 vs deflated-max ≈0.72 ❌** (was 0.71 vs 0.69 at the old floor of 100) |
 | R1 cpcv_robust | OOS P5 0.48, 0% paths<0 ✅ |
 | R2 walk_forward_ok | OOS 0.62, gap 0.16 ✅ |
 | R3 cost_headroom | positive past 25 bps ✅ |
+
+The trial counter was undercounting: `trial_registry.jsonl` had 15 fingerprints while
+`experiments.jsonl` logged 153 raw configs. `honest_n_trials()` now unions both and
+deduplicates by effective Config, giving **141 distinct strategies searched**. At that
+count the Deflated-Sharpe bar rises above the baseline net Sharpe. Any hard gate
+failure ⇒ overall **FAIL**.
 
 ### Long-history 1999–2026: stronger per-config, but config-search overfitting warning
 
@@ -158,13 +169,14 @@ because the first OOS check already failed.
 | 2021–22 | 0.86 | 23.1% | −18.2% |
 | **2023–26** | **0.34** | 21.0% | −30.6% |
 
-- H3 clears more comfortably with more data (N=6921).
+- With more data (N≈6921) the Deflated-Sharpe bar is lower, so the long-history
+  baseline still clears H3 at n_trials=141. The honest count is the same.
 - PBO across 14 configs = **0.80** ⚠️ — the IS-best config is below OOS median more
   often than chance, warning config-search overfitting.
 - Walk-forward gap near zero, CPCV robust.
 
-**Verdict:** good enough to keep as the live candidate; forward data on real
-futures is the only unfakeable test.
+**Verdict:** the edge remains the best backtested candidate, but backtest-only
+certification is exhausted. Forward data on real futures is the only unfakeable test.
 
 ---
 

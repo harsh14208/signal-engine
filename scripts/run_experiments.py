@@ -304,10 +304,10 @@ def main() -> None:
     # ── Honesty section: deflation at the true trial count + PBO ──────────────
     lines += ["", "## Honesty — overfitting at the real trial count", ""]
     lines.append(
-        f"- Deflated-Sharpe bar uses n_trials={n_trials} = max(registry={registry_count}, "
-        f"floor=100). The registry undercounts historical search, so a conservative floor "
-        f"holds the bar up; it rises as the registry grows. Deflated-max ≈ "
-        f"{df['deflated_max'].iloc[0]:.2f}."
+        f"- Deflated-Sharpe bar uses n_trials={n_trials} from the honest trial count. "
+        f"`honest_n_trials()` unions `data/trial_registry.jsonl` and `data/experiments.jsonl` "
+        f"and deduplicates by effective Config. A floor of 100 acts only as a conservative "
+        f"backstop when the logs are sparse. Deflated-max ≈ {df['deflated_max'].iloc[0]:.2f}."
     )
     failed = df[~df["passes_deflated"]]["run"].tolist()
     if failed:

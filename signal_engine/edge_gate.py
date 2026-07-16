@@ -64,13 +64,14 @@ def _placebo_config(config: Config) -> Config:
 def evaluate_edge(
     prices: pd.DataFrame,
     config: Config | None = None,
+    carry: pd.DataFrame | None = None,
     cot: pd.DataFrame | None = None,
     live_returns: pd.Series | None = None,
     n_trials: int | None = None,
 ) -> dict[str, Any]:
     """Run the battery and return metrics, gate booleans, and an overall verdict."""
     config = config or Config()
-    result = run_backtest(prices, config, cot=cot)
+    result = run_backtest(prices, config, carry=carry, cot=cot)
     daily = result.daily_returns
     net_sr = sharpe(daily)
 
@@ -79,8 +80,8 @@ def evaluate_edge(
 
     lo = lo_sharpe_ci(daily, n_trials=trials)
     boot = block_bootstrap_sharpe(daily)
-    wf = purged_walk_forward(prices, config, cot=cot)
-    cpcv = combinatorial_purged_cv(prices, config, n_groups=6, k_test=2, cot=cot)
+    wf = purged_walk_forward(prices, config, carry=carry, cot=cot)
+    cpcv = combinatorial_purged_cv(prices, config, n_groups=6, k_test=2, carry=carry, cot=cot)
 
     pcfg = _placebo_config(config)
     placebo = placebo_sharpes(lambda p: run_backtest(p, pcfg).daily_returns,

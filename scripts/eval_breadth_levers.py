@@ -51,11 +51,11 @@ def _run(label: str, syms: list[str], cfg: Config) -> dict:
         rebase=True,
     )
     panel = prices[syms].dropna(how="all").copy()
-    carry = build_carry_panel(panel, cfg) if cfg.use_carry or cfg.use_carry_proxies else None
+    carry = build_carry_panel(panel, cfg) if cfg.use_carry or cfg.use_carry_proxies or cfg.use_fx_carry else None
     cot = build_cot_forecast_panel(panel, cfg) if cfg.use_cot else None
     result = run_backtest(panel, cfg, carry=carry, cot=cot)
     s = summary(result.equity, result.daily_returns, result.turnover)
-    wf = purged_walk_forward(panel, cfg, n_splits=N_SPLITS, embargo_frac=0.02)
+    wf = purged_walk_forward(panel, cfg, n_splits=N_SPLITS, embargo_frac=0.02, carry=carry, cot=cot)
     return {
         "label": label,
         "symbols": syms,
@@ -101,6 +101,29 @@ def main() -> None:
             + ["UNG", "CPER", "CORN", "WEAT", "SOYB", "EMB", "BWX", "FXA", "FXB", "FXC"]
             + ["SMH", "SOXX", "XSD"],
             Config(**{**base_cfg.__dict__, "use_crypto": True, "use_curated_breadth": True}),
+        ),
+        # Phase 2: FX carry signal (requires carry-proxies to activate the carry rule)
+        (
+            "+carry-proxies",
+            CORE,
+            Config(**{**base_cfg.__dict__, "use_carry_proxies": True}),
+        ),
+        (
+            "+fx-carry",
+            CORE,
+            Config(**{**base_cfg.__dict__, "use_carry_proxies": True, "use_fx_carry": True}),
+        ),
+        (
+            "+fx-carry +curated breadth",
+            CORE + ["UNG", "CPER", "CORN", "WEAT", "SOYB", "EMB", "BWX", "FXA", "FXB", "FXC"],
+            Config(
+                **{
+                    **base_cfg.__dict__,
+                    "use_carry_proxies": True,
+                    "use_fx_carry": True,
+                    "use_curated_breadth": True,
+                }
+            ),
         ),
     ]
 
