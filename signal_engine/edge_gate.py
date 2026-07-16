@@ -165,7 +165,8 @@ def evaluate_edge(
 def promotion_decision(
     baseline_report: dict[str, Any],
     candidate_report: dict[str, Any],
-    forward_days: int = 0,
+    forward_report: dict[str, Any] | None = None,
+    candidate_book: str | None = None,
     comparison_pbo: float | None = None,
     **paired_kwargs,
 ) -> dict[str, Any]:
@@ -173,7 +174,11 @@ def promotion_decision(
 
     A lever ships as default only if one of two conditions holds:
       (a) paired walk-forward fold delta vs baseline has a 95% CI that excludes 0;
-      (b) it has won a ≥60-day forward challenger gate.
+      (b) it has WON the forward challenger gate — `champion_challenger_report`
+          recommends promoting this candidate's book, which requires ≥ its
+          `min_days` (default 60) of forward data AND beating the champion's
+          Sharpe by the promote margin. Days accrued alone are not evidence:
+          a challenger that merely *survives* 60 days may have lost throughout.
 
     If the comparison set's PBO > 0.5, backtest-only promotion is blocked outright
     (the search itself is overfit).  This function captures the discipline that
@@ -189,7 +194,18 @@ def promotion_decision(
             baseline_wf.get("folds", []), candidate_wf.get("folds", []), **paired_kwargs
         )
 
-    forward_won = forward_days >= 60
+    # Forward evidence = the challenger gate's own verdict, not raw days accrued.
+    forward_won = bool(
+        forward_report is not None
+        and candidate_book
+        and forward_report.get("recommendation") == f"promote:{candidate_book}"
+    )
+    forward_days = 0
+    if forward_report is not None and candidate_book:
+        forward_days = int(
+            (forward_report.get("books", {}).get(candidate_book) or {}).get("n", 0)
+        )
+
     backtest_promotable = (
         paired is not None
         and not paired.get("indistinguishable", True)
@@ -203,7 +219,10 @@ def promotion_decision(
     if backtest_promotable:
         reason.append("paired fold delta CI excludes 0 and favors candidate")
     if forward_won:
-        reason.append(f"forward challenger gate cleared ({forward_days} days)")
+        reason.append(
+            f"forward challenger gate WON ({candidate_book}, n={forward_days} days, "
+            "beat champion by the promote margin)"
+        )
     if comparison_pbo is not None and comparison_pbo > 0.5:
         reason.append(f"PBO {comparison_pbo:.2f} > 0.5 blocks backtest-only promotion")
     if not reason:

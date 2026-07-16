@@ -74,12 +74,44 @@ class TestPromotionDecision:
         assert out["verdict"] == "HOLD"
         assert "PBO" in out["reason"]
 
-    def test_promotes_on_forward_gate(self):
+    def test_promotes_on_forward_gate_won(self):
         base = self._report(0.5, [])
         cand = self._report(0.5, [])
-        out = promotion_decision(base, cand, forward_days=65)
+        # The challenger gate itself recommends promotion (>=60 days AND margin beaten).
+        fwd = {
+            "books": {
+                "champion": {"n": 65, "sharpe": 0.4},
+                "challenger_semis": {"n": 65, "sharpe": 0.75},
+            },
+            "recommendation": "promote:challenger_semis",
+            "min_days": 60,
+        }
+        out = promotion_decision(
+            base, cand, forward_report=fwd, candidate_book="challenger_semis"
+        )
         assert out["verdict"] == "PROMOTE"
         assert out["forward_won"] is True
+        assert out["forward_days"] == 65
+
+    def test_surviving_60_days_without_winning_is_not_promotion(self):
+        """A challenger that accrued 60+ days but LOST to the champion must HOLD —
+        days accrued alone are not forward evidence."""
+        base = self._report(0.5, [])
+        cand = self._report(0.5, [])
+        fwd = {
+            "books": {
+                "champion": {"n": 65, "sharpe": 0.6},
+                "challenger_semis": {"n": 65, "sharpe": 0.1},
+            },
+            "recommendation": "hold",
+            "min_days": 60,
+        }
+        out = promotion_decision(
+            base, cand, forward_report=fwd, candidate_book="challenger_semis"
+        )
+        assert out["verdict"] == "HOLD"
+        assert out["forward_won"] is False
+        assert out["forward_days"] == 65
 
 
 # ── Phase 1: friction ────────────────────────────────────────────────────────
