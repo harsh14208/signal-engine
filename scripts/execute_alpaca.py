@@ -227,6 +227,7 @@ def execute_targets(
     equity_buffer: float = 0.0,
     equity_ref_halflife: float = 0.0,
     equity_ref_path: Path | str = repo_root / "data" / "equity_ref.json",
+    use_cash_balance: bool = False,
 ) -> dict[str, Any]:
     orders_path = Path(orders_path)
     orders_path.parent.mkdir(parents=True, exist_ok=True)
@@ -244,12 +245,16 @@ def execute_targets(
         cancel_all_orders(base, key, secret)
 
     # Down-scale the (leveraged long/short) book to a gross-exposure budget so the long
-    # leg doesn't blow through the paper account's buying power. Anchored to live equity.
+    # leg doesn't blow through the paper account's buying power. By default anchored to
+    # live equity; with --use-cash-balance, anchor to cash so no margin/borrowed funds
+    # are used.
     account = get_account(base, key, secret)
     equity = float(account.get("equity") or account.get("portfolio_value") or 0.0)
-    ref_equity = _update_reference_equity(equity, Path(equity_ref_path), equity_ref_halflife)
+    cash = float(account.get("cash") or equity)
+    anchor = cash if use_cash_balance else equity
+    ref_equity = _update_reference_equity(anchor, Path(equity_ref_path), equity_ref_halflife)
     scale = gross_scale_factor(
-        target, equity, max_gross_mult, equity_buffer=equity_buffer, reference_equity=ref_equity
+        target, anchor, max_gross_mult, equity_buffer=equity_buffer, reference_equity=ref_equity
     )
 
     positions = get_positions(base, key, secret)
@@ -359,6 +364,14 @@ def main(argv: list[str] | None = None) -> int:
         "cap to the lower of live/reference equity, damping spike-driven upsizing. "
         "0 disables (use live equity). Default 0.",
     )
+    p.add_argument(
+        "--use-cash-balance",
+        action="store_true",
+        default=False,
+        dest="use_cash_balance",
+        help="Size the book against cash balance instead of equity, so positions are "
+        "fully paid and no Alpaca margin/borrowed buying power is used.",
+    )
     args = p.parse_args(argv)
 
     # The broker only ever trades the CHAMPION book. The last record in the targets
@@ -384,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
             max_gross_mult=args.max_gross_mult,
             equity_buffer=args.equity_buffer,
             equity_ref_halflife=args.equity_ref_halflife,
+            use_cash_balance=args.use_cash_balance,
         )
     except Exception as exc:
         print(f"execute_alpaca failed: {exc}", file=sys.stderr)

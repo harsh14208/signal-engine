@@ -33,4 +33,6 @@ python scripts/detect_drift.py --source auto --enforce || true
 
 # 6. Submit orders to Alpaca PAPER to match the target (reads ALPACA_SE_* creds;
 #    respects the kill switch). Enabled 2026-06-29 for forward-test execution.
-python scripts/execute_alpaca.py --paper
+#    --max-gross-mult 1.0 + --use-cash-balance sizes the book against cash only,
+#    so the paper account does not use Alpaca margin or borrowed buying power.
+python scripts/execute_alpaca.py --paper --max-gross-mult 1.0 --use-cash-balance
