@@ -46,12 +46,47 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--end", default=None, help="optional as-of date (YYYY-MM-DD)")
     p.add_argument(
+        "--max-gross",
+        type=float,
+        dest="max_gross",
+        default=None,
+        help="gross-notional cap (multiple of capital)",
+    )
+    p.add_argument(
+        "--financing-rate",
+        type=float,
+        dest="financing_rate",
+        default=0.0,
+        help="annual financing spread on levered gross notional (e.g. 0.01)",
+    )
+    p.add_argument(
+        "--financing-threshold",
+        type=float,
+        dest="financing_threshold",
+        default=1.0,
+        help="gross-notional multiple below which no financing is charged",
+    )
+    p.add_argument(
+        "--max-annual-financing-cost",
+        type=float,
+        dest="max_annual_financing_cost",
+        default=None,
+        help="hard cap on annual financing cost as a fraction of capital",
+    )
+    p.add_argument(
         "--challenger",
         action="store_true",
         help="also emit a parallel 'challenger' shadow book with COT flipped, to "
         "forward-test the COT lever without touching the champion book",
     )
     args = p.parse_args(argv)
+
+    overrides = {
+        "max_gross_notional": args.max_gross,
+        "financing_rate": args.financing_rate,
+        "financing_threshold": args.financing_threshold,
+        "max_annual_financing_cost": args.max_annual_financing_cost,
+    }
 
     def _emit(book: str, cot: bool, overrides: dict | None = None) -> int:
         try:
@@ -76,16 +111,20 @@ def main(argv: list[str] | None = None) -> int:
             f"  config: core 19 + governor + {record['buffer_fraction']:.0%} buffer "
             f"+ COT={record['use_cot']}"
         )
+        mg = record.get('max_gross_notional')
+        fr = record.get('financing_rate', 0.0)
+        mg_str = f"max_gross={mg:.1f}x" if mg is not None else "no gross cap"
         print(
-            f"  IDM={record['idm']:.2f} FDM={record['fdm']:.2f} governor={record['governor']:.2f}"
+            f"  IDM={record['idm']:.2f} FDM={record['fdm']:.2f} governor={record['governor']:.2f} "
+            f"{mg_str} financing={fr:.2%}"
         )
         return 0
 
     champ_cot = not args.no_cot
-    rc = _emit("champion", cot=champ_cot)
+    rc = _emit("champion", cot=champ_cot, overrides=overrides)
     if args.challenger:
         # Challenger flips the COT lever relative to the champion.
-        rc = _emit("challenger", cot=not champ_cot) or rc
+        rc = _emit("challenger", cot=not champ_cot, overrides=overrides) or rc
     return rc
 
 

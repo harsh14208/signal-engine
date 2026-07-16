@@ -169,6 +169,18 @@ class Config:
     # the default run_backtest path.
     calibration_min_obs: int = 256
     calibration_rebal: int = 252
+    # Gross exposure cap. None = uncapped. Applied after the governor; a value of
+    # 1.0 means no leverage, 3.0 means 3× capital in absolute notional.
+    max_gross_notional: float | None = None
+    # Financing cost on levered gross exposure. Charged on the portion of gross
+    # notional above `financing_threshold` × capital, at `financing_rate` annual.
+    # 0.0 = no financing cost. A realistic retail margin spread is ~1.0–1.5%.
+    financing_rate: float = 0.0
+    financing_threshold: float = 1.0
+    # Optional hard cap on annual financing cost as a fraction of capital.
+    # If set, positions are scaled down so expected annual financing
+    # (gross above threshold * financing_rate) does not exceed this amount.
+    max_annual_financing_cost: float | None = None
 
     def __post_init__(self):
         # Backward compatibility: the old boolean flag overrides the scheme.
@@ -206,19 +218,24 @@ class Config:
         curve = "on" if self.use_curve_steepener else "off"
         eq_mom = "on" if self.use_equity_momentum_sleeve else "off"
         carry = "proxies" if self.use_carry_proxies else ("on" if self.use_carry else "off")
-        return (
-            f"capital=${self.capital:,.0f} vol_target={self.vol_target:.0%} "
-            f"cost={self.cost_bps}bps scheme={self.cost_scheme} "
-            f"buffer={self.buffer_fraction:.0%} weights={weight} "
-            f"universe={'expanded' if self.use_expanded_universe else 'core'} "
-            f"governor={'on' if self.use_governor else 'off'}{smooth} "
-            f"regime={'on' if self.use_regime_overlay else 'off'}{regime_smooth} "
-            f"vix_term={vix_term}{vix_term_smooth} "
-            f"credit={credit}{credit_smooth} "
-            f"hmm={hmm} "
-            f"bond_carry={bond_carry} curve={curve} eq_mom={eq_mom} "
-            f"carry={carry} scalars={'empirical' if self.use_empirical_scalars else 'fixed'} "
-            f"corr_spike={'on' if self.use_corr_spike else 'off'} "
-            f"vol={garch} "
-            f"rules=[{', '.join(rules)}]"
-        )
+        parts = [
+            f"capital=${self.capital:,.0f} vol_target={self.vol_target:.0%}",
+            f"cost={self.cost_bps}bps scheme={self.cost_scheme}",
+            f"buffer={self.buffer_fraction:.0%} weights={weight}",
+            f"universe={'expanded' if self.use_expanded_universe else 'core'}",
+            f"governor={'on' if self.use_governor else 'off'}{smooth}",
+            f"regime={'on' if self.use_regime_overlay else 'off'}{regime_smooth}",
+            f"vix_term={vix_term}{vix_term_smooth}",
+            f"credit={credit}{credit_smooth}",
+            f"hmm={hmm}",
+            f"bond_carry={bond_carry} curve={curve} eq_mom={eq_mom}",
+            f"carry={carry} scalars={'empirical' if self.use_empirical_scalars else 'fixed'}",
+            f"corr_spike={'on' if self.use_corr_spike else 'off'}",
+            f"vol={garch}",
+            f"rules=[{', '.join(rules)}]",
+        ]
+        if self.max_gross_notional is not None:
+            parts.append(f"max_gross={self.max_gross_notional:.1f}x")
+        if self.financing_rate != 0.0:
+            parts.append(f"fin={self.financing_rate:.2%}")
+        return " ".join(parts)

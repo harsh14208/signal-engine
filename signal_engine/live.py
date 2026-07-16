@@ -93,6 +93,10 @@ def config_from_target(target: dict[str, Any]) -> Config:
         buffer_fraction=target.get("buffer_fraction", 0.30),
         use_cot=target.get("use_cot", True),
         cot_momentum=target.get("cot_momentum", False),
+        max_gross_notional=target.get("max_gross_notional"),
+        financing_rate=target.get("financing_rate", 0.0),
+        financing_threshold=target.get("financing_threshold", 1.0),
+        max_annual_financing_cost=target.get("max_annual_financing_cost"),
     )
 
 
@@ -177,6 +181,10 @@ def build_target_record(
         "buffer_fraction": float(cfg.buffer_fraction),
         "use_cot": bool(cfg.use_cot),
         "cot_momentum": bool(cfg.cot_momentum),
+        "max_gross_notional": cfg.max_gross_notional,
+        "financing_rate": float(cfg.financing_rate),
+        "financing_threshold": float(cfg.financing_threshold),
+        "max_annual_financing_cost": cfg.max_annual_financing_cost,
         "cot_as_of": latest_cot_as_of(cot),
         "idm": float(result.idm),
         "fdm": float(result.fdm),

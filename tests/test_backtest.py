@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from signal_engine.backtest import BacktestResult, run_backtest
 from signal_engine.config import Config
@@ -33,6 +34,31 @@ def test_equity_finite_and_positive(result):
 
 def test_costs_reduce_returns(result):
     assert result.gross_returns.sum() >= result.daily_returns.sum()
+
+
+def test_financing_cost_reduces_returns(full_prices):
+    base = run_backtest(full_prices, Config(financing_rate=0.0))
+    financed = run_backtest(full_prices, Config(financing_rate=0.02, financing_threshold=0.0))
+    # Charging financing on all gross notional should reduce net returns.
+    assert financed.daily_returns.sum() < base.daily_returns.sum()
+    # Gross returns should be unaffected by financing.
+    assert financed.gross_returns.sum() == pytest.approx(base.gross_returns.sum(), rel=1e-6)
+    # Financing cost series should be strictly positive on days with exposure.
+    assert (financed.financing_cost >= 0).all()
+    assert financed.financing_cost.sum() > 0
+
+
+def test_max_annual_financing_cost_scales_positions(full_prices):
+    loose = run_backtest(full_prices, Config(financing_rate=0.02, financing_threshold=0.0))
+    tight = run_backtest(
+        full_prices,
+        Config(financing_rate=0.02, financing_threshold=0.0, max_annual_financing_cost=0.005),
+    )
+    # Tight financing-cost cap should reduce gross exposure and financing cost.
+    assert tight.gross_exposure.mean() <= loose.gross_exposure.mean() + 1e-9
+    assert tight.financing_cost.sum() < loose.financing_cost.sum()
+    # It should also reduce net returns (less risk taken).
+    assert tight.daily_returns.abs().mean() <= loose.daily_returns.abs().mean() + 1e-9
 
 
 def test_per_instrument_cost_scheme_reduces_net_more(result, full_prices):

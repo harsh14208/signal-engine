@@ -15,12 +15,13 @@ realised vol lands near target.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import warnings
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
-from .config import Config
+from .config import BUSINESS_DAYS_YEAR, Config
 from .forecast import (
     combine_instrument,
     equal_weights as _equal_rule_weights,
@@ -61,6 +62,8 @@ class BacktestResult:
     idm: float
     fdm: float
     config: Config
+    gross_exposure: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))  # abs notional / capital
+    financing_cost: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))  # daily % of capital
 
 
 def _multiplier(sym: str, expanded: bool = False) -> float:
@@ -298,8 +301,49 @@ def _execute_backtest(
         governor = pd.Series(1.0, index=index)
         governed = raw_units
 
+    # Gross notional exposure cap (post-governor, pre-buffer; no lookahead).
+    target_notional = governed.abs().mul(prices).mul(mult, axis=1)
+    gross_exposure = (target_notional.sum(axis=1) / config.capital).fillna(0.0)
+    if config.max_gross_notional is not None and config.max_gross_notional > 0:
+        scale = (config.max_gross_notional / gross_exposure).clip(upper=1.0)
+        governed = governed.mul(scale, axis=0)
+        # Recompute after capping.
+        target_notional = governed.abs().mul(prices).mul(mult, axis=1)
+        gross_exposure = (target_notional.sum(axis=1) / config.capital).fillna(0.0)
+        if config.max_gross_notional > 1.0 and config.financing_rate == 0.0:
+            warnings.warn(
+                f"--max-gross={config.max_gross_notional} with --financing-rate=0 "
+                "overstates levered strategies; set --financing-rate for an honest comparison.",
+                stacklevel=2,
+            )
+
+    # Optional hard cap on annual financing cost.
+    if (
+        config.max_annual_financing_cost is not None
+        and config.max_annual_financing_cost >= 0.0
+        and config.financing_rate > 0.0
+    ):
+        levered = (gross_exposure - config.financing_threshold).clip(lower=0.0)
+        annual_cost = levered * config.financing_rate
+        over = annual_cost > config.max_annual_financing_cost
+        if over.any():
+            cost_scale = pd.Series(1.0, index=index)
+            cost_scale[over] = config.max_annual_financing_cost / annual_cost[over]
+            governed = governed.mul(cost_scale, axis=0)
+            target_notional = governed.abs().mul(prices).mul(mult, axis=1)
+            gross_exposure = (target_notional.sum(axis=1) / config.capital).fillna(0.0)
+
     sim = _simulate(governed, prices, mult, cost_bps, config.capital, config.buffer_fraction)
-    equity = (1.0 + sim["daily"]).cumprod()
+
+    # Financing cost on the levered portion of the held book.
+    financing = pd.Series(0.0, index=index)
+    if config.financing_rate != 0.0:
+        gross_held = sim["notional"].abs().sum(axis=1) / config.capital
+        levered = (gross_held - config.financing_threshold).clip(lower=0.0)
+        financing = levered * config.financing_rate / BUSINESS_DAYS_YEAR
+
+    net_daily_returns = sim["daily"] - financing
+    equity = (1.0 + net_daily_returns).cumprod()
     # Recompute the buffered targets for live use (last-row = next-day target).
     buffered = pd.DataFrame(
         {c: apply_buffer(governed[c], config.buffer_fraction) for c in governed.columns},
@@ -312,7 +356,7 @@ def _execute_backtest(
     final_fdm = float(fdm_series.iloc[-1]) if len(fdm_series) else 1.0
 
     return BacktestResult(
-        daily_returns=sim["daily"],
+        daily_returns=net_daily_returns,
         gross_returns=sim["gross"],
         equity=equity,
         per_instrument_returns=sim["per_inst"],
@@ -329,7 +373,9 @@ def _execute_backtest(
         weights=final_weights,
         idm=final_idm,
         fdm=final_fdm,
+        gross_exposure=gross_exposure,
         config=config,
+        financing_cost=financing,
     )
 
 

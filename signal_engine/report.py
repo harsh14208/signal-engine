@@ -47,7 +47,11 @@ def headline_report(result: BacktestResult) -> str:
         f"corr-spike: {'on' if result.config.use_corr_spike else 'off'} "
         f"(mean {result.overlay.mean():.2f}×)   "
         f"regime: {'on' if result.config.use_regime_overlay else 'off'} "
-        f"(mean {result.regime.mean():.2f}×)",
+        f"(mean {result.regime.mean():.2f}×)   "
+        f"gross: {result.gross_exposure.mean():.1f}× "
+        f"(max {result.gross_exposure.max():.1f}×)   "
+        f"financing: {result.config.financing_rate:.2%} "
+        f"(drag {result.financing_cost.sum():.1%} cum)",
         "",
         "| Metric | Net | Gross |",
         "|:--|--:|--:|",

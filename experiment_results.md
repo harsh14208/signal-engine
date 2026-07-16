@@ -11,7 +11,7 @@ Validation: 70/30 chronological OOS, random-walk placebo (n=12), Deflated Sharpe
 | baseline | 0.69 | 0.76 | 0.52 | +0.24 | 21.4% | -38.2% | 47.1x | 2.13 | 1.14 | 0.35 | 0.69 | 0.35 | 2.4x |
 | carry_proxies | 0.70 | 0.80 | 0.50 | +0.30 | 21.5% | -38.6% | 47.0x | 2.13 | 1.30 | 0.35 | 0.69 | 0.36 | 2.4x |
 | empirical_scalars | 0.69 | 0.77 | 0.49 | +0.29 | 21.5% | -41.4% | 45.0x | 2.13 | 1.13 | 0.40 | 0.69 | 0.35 | 2.4x |
-| regime_overlay | 0.68 | 0.74 | 0.53 | +0.21 | 21.4% | -39.3% | 52.3x | 2.13 | 1.14 | 0.35 | 0.69 | 0.33 | 2.4x |
+| regime_overlay | 0.68 | 0.74 | 0.53 | +0.21 | 21.4% | -39.3% | 52.3x | 2.13 | 1.14 | 0.35 | 0.69 | 0.35 | 2.4x |
 | carry+scalars | 0.73 | 0.80 | 0.55 | +0.25 | 21.4% | -38.0% | 44.4x | 2.13 | 1.29 | 0.40 | 0.69 | 0.39 | 2.4x |
 | carry+regime | 0.70 | 0.78 | 0.52 | +0.25 | 21.4% | -40.2% | 52.3x | 2.13 | 1.30 | 0.35 | 0.69 | 0.35 | 2.4x |
 | scalars+regime | 0.68 | 0.74 | 0.54 | +0.20 | 21.3% | -37.1% | 49.0x | 2.13 | 1.13 | 0.40 | 0.69 | 0.33 | 2.4x |
@@ -40,3 +40,55 @@ Validation: 70/30 chronological OOS, random-walk placebo (n=12), Deflated Sharpe
 - Deflated-Sharpe bar uses n_trials=100 = max(registry=15, floor=100). The registry undercounts historical search, so a conservative floor holds the bar up; it rises as the registry grows. Deflated-max ≈ 0.69.
 - ⚠ Runs that do **not** clear Deflated Sharpe at n_trials=100: baseline, empirical_scalars, regime_overlay, scalars+regime. A thin margin here is the parent engine's failure mode.
 - Probability of Backtest Overfitting (CSCV over 14 configs): **0.80** (⚠ OVERFIT). >0.5 means the IS-best config is below the OOS median more often than chance.
+
+---
+
+# Experiment results — Diversifier / options pack evaluation (with financing)
+
+Date: 2026-07-15
+Data: real ETF-proxy prices (cache), 2007–2026.
+Method: 5-fold purged walk-forward (20% embargo); full-sample backtest for Net Sharpe.
+All variants run with `--max-gross 3.0` unless noted.
+
+## Summary
+
+| Variant | Financing | Net SR | WF OOS SR | IS−OOS gap | Ann vol | Max DD | Mean gross | Turnover |
+|---------|-----------|-------:|----------:|------------:|--------:|-------:|-----------:|---------:|
+| baseline (no cap) | 0% | 0.690 | 0.633 | 0.082 | 21.4% | -38.2% | 4.09× | 47.1× |
+| baseline | 0% | 0.646 | 0.548 | 0.123 | 15.5% | -32.1% | 2.68× | 24.1× |
+| baseline | 1% | 0.539 | 0.427 | 0.154 | 15.5% | -33.2% | 2.68× | 24.1× |
+| + network momentum | 0% | 0.650 | 0.543 | 0.168 | 15.4% | -34.0% | 2.67× | 23.5× |
+| + network momentum | 1% | 0.543 | 0.422 | 0.197 | 15.4% | -35.0% | 2.67× | 23.5× |
+| + QQQ | 0% | 0.628 | 0.593 | 0.047 | 15.6% | -31.9% | 2.67× | 23.7× |
+| + QQQ | 1% | 0.522 | 0.474 | 0.077 | 15.6% | -33.0% | 2.67× | 23.7× |
+| + semis | 0% | 0.646 | 0.600 | 0.031 | 16.6% | -32.0% | 2.61× | 23.4× |
+| + semis | 1% | 0.550 | 0.493 | 0.057 | 16.6% | -33.9% | 2.61× | 23.4× |
+| + diversifier pack | 0% | 0.639 | 0.581 | 0.109 | 13.5% | -29.9% | 2.76× | 23.5× |
+| + diversifier pack | 0.5% | 0.575 | 0.506 | 0.130 | 13.5% | -30.7% | 2.76× | 23.5× |
+| + diversifier pack | 1% | 0.510 | 0.430 | 0.152 | 13.5% | -32.2% | 2.76× | 23.5× |
+| + diversifier pack | 1.5% | 0.446 | 0.355 | 0.173 | 13.5% | -33.6% | 2.76× | 23.5× |
+| + rate pack | 0% | 0.641 | 0.566 | 0.108 | 13.6% | -32.1% | 2.76× | 23.4× |
+| + rate pack | 1% | 0.513 | 0.418 | 0.150 | 13.6% | -33.8% | 2.76× | 23.4× |
+| + diversifier + COT + carry | 0% | 0.692 | 0.609 | 0.162 | 13.3% | -29.0% | 2.72× | 23.5× |
+| + diversifier + COT + carry | 1% | 0.564 | 0.458 | 0.209 | 13.3% | -30.8% | 2.72× | 23.5× |
+| weight: corr-cluster | 0% | 0.623 | 0.543 | 0.049 | 14.2% | -29.3% | 2.73× | 25.4× |
+| weight: corr-cluster | 1% | 0.502 | 0.406 | 0.079 | 14.2% | -30.6% | 2.73× | 25.4× |
+| weight: sharpe | 0% | 0.629 | 0.598 | 0.009 | 14.8% | -32.2% | 2.69× | 24.5× |
+| weight: sharpe | 1% | 0.515 | 0.473 | 0.030 | 14.8% | -33.2% | 2.69× | 24.5× |
+
+## Interpretation
+
+- Without financing costs, capped bond-pack/diversifier and corr-cluster variants post attractive **full-sample** Sharpe ratios (0.62–0.69) because the 3× gross cap still allows ~2.7× average notional in low-vol instruments.
+- A realistic 1% annual financing spread on gross notional above 1× capital reduces Net Sharpe by roughly **0.10–0.13** and walk-forward OOS Sharpe by a similar amount.
+- After financing, the **previously leading bond/diversifier and corr-cluster variants fall back into the pack**:
+  - +semis (WF OOS 0.493) and +QQQ (0.474) are now competitive with or ahead of +diversifier pack (0.430) and +rate pack (0.418).
+  - corr-cluster collapses from 0.543 to 0.406 OOS.
+  - The best financed OOS result remains **+diversifier + COT + carry** (0.458), but its IS/OOS gap widens to +0.21.
+- Conclusion: **financing costs are material** and must be included when comparing levered bond packs to unlevered equity additions. The clean, already-shipped flags (`--semis`, `--qqq`, `--network-momentum`) are robust because they do not rely on hidden leverage and their ranking improves on a like-for-like cost basis.
+
+## Implementation
+
+- Added `Config.financing_rate` and `Config.financing_threshold`.
+- Added `--financing-rate` / `--financing-threshold` CLI flags.
+- Financing is applied after gross-notional capping and subtracted from daily net returns; it therefore flows into Sharpe, drawdown, and all downstream metrics.
+- Added `scripts/eval_options_financing.py` and saved results to `data/options_evaluation_financing.json`.

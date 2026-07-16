@@ -60,9 +60,24 @@ UNIVERSE: tuple[Instrument, ...] = (
     Instrument("VNQ", "US REITs", "real_estate", cost_bps=2.5),
 )
 
+# Opt-in instrument packs that can be added to the core universe via CLI flags.
+# They are NOT in UNIVERSE (the deployed 19), but they carry metadata so that
+# reports and per-instrument costs work when a user adds them.
+OPTION_PACK_INSTRUMENTS: tuple[Instrument, ...] = (
+    Instrument("QQQ", "Nasdaq-100", "equity", cost_bps=1.0),
+    Instrument("SMH", "Semiconductors", "equity", cost_bps=2.5),
+    Instrument("SOXX", "Semiconductors", "equity", cost_bps=2.5),
+    Instrument("XSD", "Semiconductors", "equity", cost_bps=2.5),
+    Instrument("BNDX", "Intl aggregate bonds", "bond", cost_bps=2.0),
+    Instrument("MUB", "Municipal bonds", "bond", cost_bps=1.5),
+    Instrument("EMLC", "EM local currency bonds", "bond", cost_bps=2.5),
+    Instrument("PFF", "Preferred stocks", "credit", cost_bps=2.0),
+    Instrument("AMLP", "MLPs / energy infrastructure", "commodity", cost_bps=2.5),
+)
+
 # Expanded free-ETF universe. Thin/young ETFs are automatically filtered by the
 # >300-bar rule in data.load_prices, so adding candidates is cheap.
-EXPANDED_UNIVERSE: tuple[Instrument, ...] = UNIVERSE + (
+EXPANDED_UNIVERSE: tuple[Instrument, ...] = UNIVERSE + OPTION_PACK_INSTRUMENTS + (
     # More equity regions / factors
     Instrument("FXI", "China large cap", "equity", cost_bps=2.5),
     Instrument("EWG", "Germany", "equity", cost_bps=2.0),
@@ -113,7 +128,9 @@ SYNTHETIC_INSTRUMENTS: tuple[Instrument, ...] = (
     ),
 )
 
-BY_SYMBOL: dict[str, Instrument] = {i.symbol: i for i in UNIVERSE + SYNTHETIC_INSTRUMENTS}
+BY_SYMBOL: dict[str, Instrument] = {
+    i.symbol: i for i in UNIVERSE + SYNTHETIC_INSTRUMENTS + OPTION_PACK_INSTRUMENTS
+}
 BY_SYMBOL_EXPANDED: dict[str, Instrument] = {
     i.symbol: i for i in EXPANDED_UNIVERSE + SYNTHETIC_INSTRUMENTS
 }

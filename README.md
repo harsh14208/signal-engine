@@ -217,14 +217,38 @@ front, don't fake the result.
   every overlay that came before it. Kept opt-in (needs a network fetch + the margin is
   modest and fold-concentrated); recommended for promotion pending wider coverage.
 
+- **`--network-momentum` (VALIDATED-POSITIVE):** a price-only lead-lag graph signal
+  (follow the leader cross-sectional momentum). It adds a fourth orthogonal rule to
+  EWMAC/breakout, clears the walk-forward with no leverage increase, and needs no new
+  instrument data. Full sample 0.69→0.73, walk-forward OOS 0.63→0.67. **Shipped** as a
+  validated rule toggle.
+
 
 - **`--monitor`** prints the strategy's rolling 1-year Sharpe with an edge-decay
   alarm; `monitor.reconcile(live, backtest)` scores live-vs-backtest agreement
   (correlation / tracking error / drift) for when live returns exist — the
   reconciliation harness the parent project never had.
-- **`--help` ends with a flag taxonomy**: CORE (validated) / RESEARCH (tested,
-  none beat the walk-forward default — opt-in only) / VALIDATION-DIAGNOSTICS.
-  ~70 flags exist but only a handful shape the validated default.
+- **`--semis` (VALIDATED-POSITIVE):** adds SMH/SOXX/XSD to the core universe.
+  Walk-forward OOS improves from 0.63 to 0.69, traded days increase, and gross
+  exposure stays in line with the baseline. **Shipped** as a validated instrument-pack
+  toggle.
+
+- **`--qqq` (VALIDATED-POSITIVE):** adds QQQ (Nasdaq-100) to the core universe.
+  Walk-forward OOS improves from 0.63 to 0.68 with no leverage blow-up. **Shipped** as
+  a validated instrument-pack toggle.
+
+- **`--diversifier-pack`, `--rate-pack`** add cross-asset bond/credit/commodity
+  ETFs (BNDX/PFF/AMLP/MUB/EMLC and BNDX/MUB). They produce the highest uncapped
+  Sharpe but depend on levering low-vol bonds. Left as opt-in instrument packs; pair
+  with `--max-gross` to reality-check implementation feasibility.
+- **`--max-gross N`** applies a gross-notional exposure cap (e.g. `3.0` for 3×
+  capital) post-governor. Useful for reality-checking how much an apparent edge
+  depends on levering low-vol instruments; note that a tight cap lowers realized
+  vol and can push Sharpe below the Deflated-Sharpe bar.
+- **`--help` ends with a flag taxonomy**: CORE (validated) / VALIDATED-POSITIVE
+  (clears walk-forward, safe to ship) / RESEARCH (tested, none beat default) /
+  INSTRUMENT PACKS (leverage-dependent) / VALIDATION-DIAGNOSTICS. ~70 flags exist
+  but only a handful shape the validated default.
 - **VRP note:** a free VRP data layer exists (`vrp_data.py`, CBOE vol indices —
   no options panel needed) but is **parked**: injecting a fat-tailed short-vol
   stream as a tradable instrument detonates the engine's vol-targeting. Harvesting

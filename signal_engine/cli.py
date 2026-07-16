@@ -41,17 +41,23 @@ from .validation import block_bootstrap_sharpe, lo_sharpe_ci, placebo_sharpes, p
 
 
 _FLAG_TAXONOMY = """\
-flag taxonomy (validated 2026-06-27 — promote on the walk-forward, never one split):
+flag taxonomy (validated 2026-07-15 — promote on the walk-forward, never one split):
   CORE (shape the validated default): --vol-target --buffer --cost-scheme
       --weight-scheme --no-governor --governor-smooth
-  VALIDATED-POSITIVE (opt-in; clears the walk-forward but needs a network fetch):
+  VALIDATED-POSITIVE (opt-in; clears the walk-forward, safe to ship):
       --cot   (CFTC positioning; full 0.69→0.72, walk-forward OOS 0.61→0.63)
+      --network-momentum  (lead-lag price graph signal; full 0.69→0.73, WF OOS 0.63→0.67)
+      --semis  (add SMH/SOXX/XSD; WF OOS 0.63→0.69, no leverage blow-up)
+      --qqq    (add Nasdaq-100; WF OOS 0.63→0.68, no leverage blow-up)
   RESEARCH — tested, NONE beat the walk-forward default; opt-in only:
       --cluster-weights --expanded-universe --empirical-scalars --regime-overlay
       --vix-term-overlay --credit-overlay --hmm-regime-overlay
       --equity-momentum-sleeve --curve-steepener --real-bond-carry --garch-vol
       --accel --xsmom --corr-spike --carry-proxies --core-commodities --cot-momentum
       --ship-candidate
+  LEVERAGE-DEPENDENT — require --financing-rate for honest comparison:
+      --diversifier-pack --rate-pack  (bond packs; edge shrinks under realistic financing)
+      --weight-scheme corr_cluster    (concentrates in low-vol instruments; OOS 0.54→0.41 at 1% financing)
   VALIDATION / DIAGNOSTICS: --validate --oos --walk-forward --diagnostics
       --monitor --n-trials --placebo
 """
@@ -107,6 +113,10 @@ def build_config(args) -> Config:
         use_cot=args.cot,
         cot_momentum=args.cot_momentum,
         use_core_commodities=args.core_commodities,
+        max_gross_notional=args.max_gross,
+        financing_rate=args.financing_rate,
+        financing_threshold=args.financing_threshold,
+        max_annual_financing_cost=args.max_annual_financing_cost,
         use_garch_vol=args.use_garch_vol,
         garch_weight=args.garch_weight,
         garch_min_history=args.garch_min_history,
@@ -123,6 +133,12 @@ def build_config(args) -> Config:
         hmm_trans_degear=args.hmm_trans_degear,
         hmm_smooth=args.hmm_smooth,
         hmm_random_state=args.hmm_random_state,
+        use_network_momentum=args.use_network_momentum,
+        nm_speed=args.nm_speed,
+        nm_lookback=args.nm_lookback,
+        nm_lag=args.nm_lag,
+        nm_rebal=args.nm_rebal,
+        nm_top_k=args.nm_top_k,
     )
 
 
@@ -246,15 +262,37 @@ def _print_monitor(result) -> None:
     print(f"- latest vs floor {rep['alarm_floor']:.2f}: {flag}")
 
 
-def run(args) -> int:
-    cfg = build_config(args)
-    expanded = cfg.use_expanded_universe
-    if cfg.use_core_commodities and not expanded:
+def _build_symbol_list(args) -> tuple[list[str], str]:
+    """Return the symbol list and cache tag implied by the CLI arguments."""
+    expanded = args.expanded_universe
+    if args.core_commodities and not expanded:
         syms = symbols(expanded=False) + ["UNG", "CORN", "WEAT"]
         cache_tag = "core_plus"
     else:
         syms = symbols(expanded=expanded)
         cache_tag = "expanded" if expanded else "universe"
+
+    pack_additions: list[str] = []
+    if args.semis:
+        pack_additions += ["SMH", "SOXX", "XSD"]
+    if args.qqq:
+        pack_additions += ["QQQ"]
+    if args.diversifier_pack:
+        pack_additions += ["BNDX", "PFF", "AMLP", "MUB", "EMLC"]
+    if args.rate_pack:
+        pack_additions += ["BNDX", "MUB"]
+    if pack_additions:
+        seen = set(syms)
+        syms = syms + [s for s in pack_additions if s not in seen]
+        cache_tag = "options_experiment"
+
+    return syms, cache_tag
+
+
+def run(args) -> int:
+    cfg = build_config(args)
+    syms, cache_tag = _build_symbol_list(args)
+
     prices = load_prices(
         syms, start=args.start, end=args.end, source=args.source, cache_tag=cache_tag
     )
@@ -664,6 +702,28 @@ def main(argv=None) -> int:
         dest="core_commodities",
         help="core + UNG/CORN/WEAT (the COT-mapped diversifying commodities)",
     )
+    p.add_argument(
+        "--semis",
+        action="store_true",
+        help="add SMH/SOXX/XSD semiconductor ETFs to the universe",
+    )
+    p.add_argument(
+        "--qqq",
+        action="store_true",
+        help="add QQQ (Nasdaq-100) to the universe",
+    )
+    p.add_argument(
+        "--diversifier-pack",
+        action="store_true",
+        dest="diversifier_pack",
+        help="add BNDX/PFF/AMLP/MUB/EMLC cross-asset diversifiers (watch leverage)",
+    )
+    p.add_argument(
+        "--rate-pack",
+        action="store_true",
+        dest="rate_pack",
+        help="add BNDX/MUB international/rate bond diversifiers (watch leverage)",
+    )
     p.add_argument("--monitor", action="store_true", help="rolling 1y Sharpe edge-decay monitor")
     p.add_argument("--placebo", type=int, default=12, help="random-walk placebo runs")
     p.add_argument(
@@ -682,6 +742,34 @@ def main(argv=None) -> int:
     p.add_argument("--garch-min-history", type=int, default=252, dest="garch_min_history")
     p.add_argument("--garch-refit-step", type=int, default=63, dest="garch_refit_step")
     p.add_argument("--garch-horizon", type=int, default=1, dest="garch_horizon")
+    p.add_argument(
+        "--max-gross",
+        type=float,
+        default=None,
+        dest="max_gross",
+        help="gross notional exposure cap as a multiple of capital (e.g. 3.0). None = uncapped.",
+    )
+    p.add_argument(
+        "--financing-rate",
+        type=float,
+        default=0.0,
+        dest="financing_rate",
+        help="annual financing spread charged on gross notional above --financing-threshold (e.g. 0.015)",
+    )
+    p.add_argument(
+        "--financing-threshold",
+        type=float,
+        default=1.0,
+        dest="financing_threshold",
+        help="multiple of capital below which no financing cost is charged (default 1.0)",
+    )
+    p.add_argument(
+        "--max-annual-financing-cost",
+        type=float,
+        default=None,
+        dest="max_annual_financing_cost",
+        help="hard cap on annual financing cost as a fraction of capital (e.g. 0.02 = 2%%/year)",
+    )
     args = p.parse_args(argv)
     if args.ship_candidate:
         args.expanded_universe = True
