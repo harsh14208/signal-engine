@@ -1,11 +1,13 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from signal_engine.backtest import run_backtest
 from signal_engine.config import Config
 from signal_engine.validation import (
     block_bootstrap_sharpe,
     lo_sharpe_ci,
+    paired_fold_comparison,
     placebo_sharpes,
     purged_walk_forward,
     random_walk_panel,
@@ -68,3 +70,41 @@ def test_walk_forward_embargo_creates_gap(small_prices):
         train_end_idx = small_prices.index.get_loc(pd.Timestamp(f["train_end"]))
         test_start_idx = small_prices.index.get_loc(pd.Timestamp(f["test_start"]))
         assert test_start_idx > train_end_idx
+
+
+def test_paired_fold_comparison_matches_by_test_start():
+    base = [
+        {"test_start": "2020-01-01", "oos_sharpe": 0.5},
+        {"test_start": "2021-01-01", "oos_sharpe": 0.6},
+        {"test_start": "2022-01-01", "oos_sharpe": 0.4},
+    ]
+    cand = [
+        {"test_start": "2020-01-01", "oos_sharpe": 0.55},
+        {"test_start": "2021-01-01", "oos_sharpe": 0.65},
+        {"test_start": "2022-01-01", "oos_sharpe": 0.45},
+    ]
+    out = paired_fold_comparison(base, cand, n_bootstrap=500, seed=1)
+    assert not out.get("insufficient")
+    assert out["n_common"] == 3
+    assert out["mean_delta"] == pytest.approx(0.05, abs=1e-6)
+    assert not out["indistinguishable"]
+    assert out["ci_low"] > 0
+
+
+def test_paired_fold_comparison_indistinguishable_when_ci_spans_zero():
+    base = [
+        {"test_start": "2020-01-01", "oos_sharpe": 0.5},
+        {"test_start": "2021-01-01", "oos_sharpe": 0.6},
+    ]
+    cand = [
+        {"test_start": "2020-01-01", "oos_sharpe": 0.5},
+        {"test_start": "2021-01-01", "oos_sharpe": 0.6},
+    ]
+    out = paired_fold_comparison(base, cand, n_bootstrap=500, seed=1)
+    assert out["mean_delta"] == pytest.approx(0.0, abs=1e-6)
+    assert out["indistinguishable"]
+
+
+def test_paired_fold_comparison_insufficient_folds():
+    out = paired_fold_comparison([{"test_start": "2020-01-01"}], [])
+    assert out.get("insufficient")

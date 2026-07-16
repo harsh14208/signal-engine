@@ -62,6 +62,7 @@ def _args(**kwargs) -> object:
         "capital": 1_000_000.0,
         "vol_target": 0.20,
         "no_breakout": False,
+        "breakout_spans": None,
         "carry": False,
         "carry_proxies": False,
         "real_bond_carry": False,

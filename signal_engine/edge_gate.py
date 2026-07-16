@@ -162,6 +162,64 @@ def evaluate_edge(
     }
 
 
+def promotion_decision(
+    baseline_report: dict[str, Any],
+    candidate_report: dict[str, Any],
+    forward_days: int = 0,
+    comparison_pbo: float | None = None,
+    **paired_kwargs,
+) -> dict[str, Any]:
+    """Return a structured promotion verdict for a candidate vs baseline.
+
+    A lever ships as default only if one of two conditions holds:
+      (a) paired walk-forward fold delta vs baseline has a 95% CI that excludes 0;
+      (b) it has won a ≥60-day forward challenger gate.
+
+    If the comparison set's PBO > 0.5, backtest-only promotion is blocked outright
+    (the search itself is overfit).  This function captures the discipline that
+    today lives in chat transcripts.
+    """
+    baseline_wf = baseline_report.get("raw", {}).get("walk_forward", {})
+    candidate_wf = candidate_report.get("raw", {}).get("walk_forward", {})
+    paired = None
+    if baseline_wf and candidate_wf and not baseline_wf.get("insufficient"):
+        from .validation import paired_fold_comparison
+
+        paired = paired_fold_comparison(
+            baseline_wf.get("folds", []), candidate_wf.get("folds", []), **paired_kwargs
+        )
+
+    forward_won = forward_days >= 60
+    backtest_promotable = (
+        paired is not None
+        and not paired.get("indistinguishable", True)
+        and paired.get("mean_delta", 0.0) > 0.0
+    )
+    if comparison_pbo is not None and comparison_pbo > 0.5:
+        backtest_promotable = False
+
+    verdict = "PROMOTE" if (backtest_promotable or forward_won) else "HOLD"
+    reason = []
+    if backtest_promotable:
+        reason.append("paired fold delta CI excludes 0 and favors candidate")
+    if forward_won:
+        reason.append(f"forward challenger gate cleared ({forward_days} days)")
+    if comparison_pbo is not None and comparison_pbo > 0.5:
+        reason.append(f"PBO {comparison_pbo:.2f} > 0.5 blocks backtest-only promotion")
+    if not reason:
+        reason.append("no promotion criterion met")
+
+    return {
+        "verdict": verdict,
+        "forward_days": forward_days,
+        "comparison_pbo": comparison_pbo,
+        "paired_fold_comparison": paired,
+        "backtest_promotable": backtest_promotable,
+        "forward_won": forward_won,
+        "reason": "; ".join(reason),
+    }
+
+
 def format_verdict(report: dict[str, Any]) -> str:
     """Human-readable gate report for the CLI."""
     m = report["metrics"]

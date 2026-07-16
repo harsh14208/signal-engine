@@ -20,7 +20,7 @@ from .carry_data import build_carry_panel
 from .cot_data import build_cot_forecast_panel
 from .curve_data import load_curve_instruments
 from .equity_momentum_sleeve import build_equity_momentum_sleeve
-from .config import Config
+from .config import Config, DEFAULT_BREAKOUT_SPANS
 from .data import load_prices, synthetic_carry
 from .diagnostics import cost_buffer_frontier, per_instrument_attribution, vix_regime_split
 from .experiments import count_experiments, log_experiment
@@ -73,6 +73,7 @@ def build_config(args) -> Config:
         capital=args.capital,
         vol_target=args.vol_target,
         use_breakout=not args.no_breakout,
+        breakout_spans=args.breakout_spans if args.breakout_spans is not None else DEFAULT_BREAKOUT_SPANS,
         use_carry=args.carry,
         use_carry_proxies=args.carry_proxies,
         use_real_bond_carry=args.real_bond_carry,
@@ -484,6 +485,13 @@ def main(argv=None) -> int:
         help="smooth weights/IDM/FDM transitions over N days to cut estimation-driven turnover",
     )
     p.add_argument("--no-breakout", action="store_true")
+    p.add_argument(
+        "--breakout-spans",
+        type=lambda s: tuple(int(x.strip()) for x in s.split(",")),
+        default=None,
+        dest="breakout_spans",
+        help="comma-separated breakout channel spans (default: 40,80,160)",
+    )
     p.add_argument(
         "--weight-scheme",
         default="equal",

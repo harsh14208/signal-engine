@@ -64,6 +64,75 @@ is the whole reason this engine beats the 0.15-Sharpe project it replaced.
 
 ---
 
+## 🎯 Tier A++ — next most beneficial (added 2026-07-15, post forward-harness audit)
+
+Ranked by expected value ÷ cost. Items 1–4 harden the *measurement system* (the
+week's lesson: the engine was fine, the measurement was broken); items 5–8 harden
+the *research method* (the lesson of PBO=0.80: rankings without error bars promote
+noise). None of these require paid data.
+
+1. [ ] **Mark the executed paper book as a third return stream.** The Alpaca paper
+   account trades daily, but its realised P&L is never marked into
+   `live_returns.csv` (only the costless shadow book is). Pull account equity in
+   the nightly loop and append `mode=paper` rows, then reconcile **executed vs
+   shadow**: that difference *is* the real-world drag of the 33 skipped
+   non-shortable orders (FXE/FXY/USO), the gross-scale cap, whole-share rounding,
+   and zero-cross deferrals. Without it, the paper→live jump is blind.
+   *Cost: small — `get_account()` already exists in `execute_alpaca.py`.*
+
+2. [ ] **Measure delay cost with arrival prices.** `compute_delay_slippage` exists
+   but `arrival_prices` is never supplied — the `delay_return` column has been
+   empty since day one. Cache next-session opens (yfinance provides Open) and pass
+   them in `shadow_book.py`. This prices the decide-at-close → trade-at-open gap
+   *before* real money depends on it.
+   *Cost: small — the function is written and tested; only the data plumbing is missing.*
+
+3. [ ] **Auto-generate the research summary from the eval JSONs.** The prose has
+   already drifted from the data once: `FINAL_RESEARCH_SUMMARY.md` says Deflated
+   Sharpe clears; `experiment_results.md` records the baseline FAILING at
+   n_trials=100. A `scripts/build_summary.py` that renders the headline tables and
+   pass/fail verdicts straight from `data/options_evaluation_*.json` +
+   `experiments.jsonl` makes cherry-picking structurally impossible.
+   *Cost: small. Value: protects every future decision made by reading the docs.*
+
+4. [ ] **PIT discipline for the COT panel (same bug class as prices).** CFTC data
+   is restated and the panel is refreshed in place — the exact silent-rewrite
+   failure the price cache just had. Stitch/append COT updates, log rejected
+   restatements, and let the input-revision check attribute forecast diffs to COT
+   vs prices. Also schedule the deliberate cache **rebase protocol** (e.g.
+   annually, logged) so the stitched basis drift stays bounded.
+   *Cost: medium — mirror `data._stitch_update` for the COT cache.*
+
+5. [x] **Fold-level error bars on every variant comparison.** Added
+   `validation.paired_fold_comparison(baseline_folds, candidate_folds)`: matches
+   folds by `test_start`, computes the mean paired OOS-Sharpe delta, and returns a
+   bootstrap 95% CI. `scripts/eval_free_rules.py` prints "indistinguishable" when
+   the CI spans 0. Next step is to wire this into the other `eval_*` scripts so
+   every variant comparison carries error bars.
+
+6. [x] **Promotion policy as code.** Added `edge_gate.promotion_decision(baseline_report,
+   candidate_report, forward_days=0, comparison_pbo=None)`. A lever is promotable
+   only if (a) paired fold-delta CI excludes 0 in its favor, or (b) it has cleared
+   a ≥60-day forward challenger gate. PBO > 0.5 blocks backtest-only promotion
+   outright. Covered by `tests/test_edge_gate_friction.py::TestPromotionDecision`.
+   Next step: wire this into the challenger lifecycle automation (Tier A++ #8).
+
+7. [ ] **Vol-restoration study under the deployment constraint.** The 3× cap +
+   financing book runs 15.5% realised vol vs the 20% target — capped results
+   describe a *deleveraged* strategy, so Sharpe comparisons hide a return gap. If
+   cap+financing is the deployment reality, quantify: re-tuned vol target /
+   instrument mix at equal *realised* vol, and report return-at-equal-risk
+   alongside Sharpe in the eval scripts.
+   *Cost: medium — pure re-runs on data in hand.*
+
+8. [ ] **Challenger lifecycle automation.** Books now exist (COT flip, semis) but
+   nothing reports them: wire `champion_challenger_report` into the nightly loop
+   output, reconcile each challenger with `reconcile.py --book <name>` weekly, and
+   emit a promotion-readiness line (days accrued / margin vs champion / days
+   remaining). At day 60 the promotion decision should be reading one line, not a
+   research project.
+   *Cost: small — all the pieces exist; this is wiring.*
+
 ## Tier A — forward-validate the edge (paper deploy + reconcile) — THE next step
 
 The engine is validated in-sample + walk-forward but has seen **NO forward data**. Closing
@@ -286,9 +355,20 @@ walk-forward (not a single split) before promoting** (see the ship-candidate les
    ETF spreads. Use `--cost-scheme instrument` to apply them; default `--cost-scheme flat` keeps
    the previous 1.5 bps behaviour.
 
-6. [~] **Additional orthogonal rules.** Acceleration (`--accel`) and cross-sectional momentum
-   (`--xsmom`) are implemented. Longer breakout channels remain available via the existing
-   configurable `breakout_spans`. Validate each rule vs placebo before enabling by default.
+6. [x] **Additional orthogonal rules.** Acceleration (`--accel`), cross-sectional momentum
+   (`--xsmom`), and configurable breakout spans (`--breakout-spans`) are implemented.
+   `scripts/eval_free_rules.py` ran a purged walk-forward comparison on the core universe:
+
+   | Configuration | Net SR | WF OOS SR | Verdict |
+   |---|---:|---:|---|
+   | baseline | 0.688 | 0.638 | — |
+   | +accel | 0.643 | 0.635 | indistinguishable |
+   | +xsmom | 0.646 | 0.642 | indistinguishable |
+   | +accel +xsmom | 0.651 | 0.613 | indistinguishable |
+   | longer breakout (80,160,320) | 0.666 | 0.593 | indistinguishable |
+   | +all three | 0.659 | 0.628 | **significantly worse** |
+
+   None improves walk-forward OOS Sharpe; all remain **RESEARCH/opt-in**.
 
 ## Tier 3 — honesty / infrastructure
 

@@ -188,6 +188,45 @@ def purged_walk_forward(
     }
 
 
+def paired_fold_comparison(
+    baseline_folds: list[dict],
+    candidate_folds: list[dict],
+    n_bootstrap: int = 2000,
+    seed: int = 42,
+) -> dict:
+    """Paired per-fold delta between candidate and baseline OOS Sharpe.
+
+    Matches folds by test_start, computes the mean paired delta, and returns a
+    bootstrap (resample folds with replacement) 95% CI on that delta.  When the CI
+    spans zero the candidate is **statistically indistinguishable** from the
+    baseline on the available folds.
+    """
+    base = {f["test_start"]: f for f in baseline_folds}
+    cand = {f["test_start"]: f for f in candidate_folds}
+    common = sorted(set(base) & set(cand))
+    if len(common) < 2:
+        return {"insufficient": True, "n_common": len(common)}
+
+    deltas = np.array([cand[k]["oos_sharpe"] - base[k]["oos_sharpe"] for k in common])
+    rng = np.random.default_rng(seed)
+    boot = np.empty(n_bootstrap)
+    for i in range(n_bootstrap):
+        idx = rng.integers(0, len(deltas), size=len(deltas))
+        boot[i] = deltas[idx].mean()
+
+    return {
+        "n_common": len(common),
+        "mean_delta": float(deltas.mean()),
+        "ci_low": float(np.percentile(boot, 2.5)),
+        "ci_high": float(np.percentile(boot, 97.5)),
+        "indistinguishable": bool(np.percentile(boot, 2.5) <= 0 <= np.percentile(boot, 97.5)),
+        "folds": [
+            {"test_start": k, "baseline_oos": base[k]["oos_sharpe"], "candidate_oos": cand[k]["oos_sharpe"]}
+            for k in common
+        ],
+    }
+
+
 def combinatorial_purged_cv(
     prices: pd.DataFrame,
     config: Config,
