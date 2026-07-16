@@ -1,8 +1,7 @@
-"""Wide sensitivity grid: financing rate × gross cap × top variants.
+"""Evaluate the six new optimizations, individually and combined.
 
-Runs the survivors of the financing-aware evaluation across a realistic range of
-financing spreads and gross-notional caps. Results are saved to JSON and a pivot
-table is printed for quick comparison.
+All runs use a realistic 3× gross cap + 1% financing so results are comparable to
+the earlier options evaluation. Walk-forward OOS Sharpe is the honest bar.
 """
 
 # ruff: noqa: E402
@@ -39,9 +38,8 @@ CORE = core_symbols(expanded=False)
 END = "2026-07-10"
 CACHE_TAG = "options_experiment"
 N_WF_SPLITS = 5
-
-CAPS = [None, 4.0, 3.0, 2.5, 2.0]
-FINANCING_RATES = [0.0, 0.005, 0.010, 0.015, 0.020]
+CAP = 3.0
+FIN_RATE = 0.01
 
 
 def _build_carry(prices: pd.DataFrame, cfg: Config) -> pd.DataFrame | None:
@@ -135,13 +133,12 @@ def _run(label: str, syms: list[str], prices: pd.DataFrame, cfg: Config) -> dict
     wf = _purged_walk_forward_ex(panel, cfg, carry, cot)
     return {
         "label": label,
-        "max_gross": cfg.max_gross_notional,
-        "financing_rate": cfg.financing_rate,
         "net_sharpe": s["sharpe"],
         "ann_vol": s["ann_vol"],
         "max_dd": s["max_drawdown"],
         "mean_gross": float(result.gross_exposure.mean()),
-        "max_gross_observed": float(result.gross_exposure.max()),
+        "max_gross": float(result.gross_exposure.max()),
+        "ann_turnover": s.get("ann_turnover"),
         "wf_is": wf.get("mean_is_sharpe"),
         "wf_oos": wf.get("mean_oos_sharpe"),
         "wf_gap": wf.get("mean_gap"),
@@ -149,57 +146,44 @@ def _run(label: str, syms: list[str], prices: pd.DataFrame, cfg: Config) -> dict
 
 
 def main() -> int:
-    packs = {
-        "diversifier": ["BNDX", "PFF", "AMLP", "MUB", "EMLC"],
-        "rate": ["BNDX", "MUB"],
-        "semis": ["SMH", "SOXX", "XSD"],
-        "qqq": ["QQQ"],
-    }
-    all_syms = list(set(CORE + [s for p in packs.values() for s in p]))
     prices = load_prices(
-        all_syms,
+        CORE,
         start="2007-01-01",
         end=END,
         source="cache",
         cache_tag=CACHE_TAG,
     )
 
-    base_variants = [
-        ("baseline", CORE, Config()),
-        ("+ semis", CORE + packs["semis"], Config()),
-        ("+ QQQ", CORE + packs["qqq"], Config()),
-        ("+ diversifier pack", CORE + packs["diversifier"], Config()),
-        ("+ rate pack", CORE + packs["rate"], Config()),
-        ("weight: corr-cluster", CORE, Config(weight_scheme="corr_cluster")),
-        ("weight: sharpe", CORE, Config(weight_scheme="sharpe")),
+    base = Config(max_gross_notional=CAP, financing_rate=FIN_RATE)
+    candidates = [
+        ("baseline", base),
+        ("+ calibration smooth", Config(**{**base.__dict__, "calibration_smooth": 20})),
+        ("+ drawdown control", Config(**{**base.__dict__, "use_drawdown_control": True})),
+        ("+ trend strength filter", Config(**{**base.__dict__, "use_trend_strength_filter": True})),
+        ("+ cal smooth + drawdown", Config(**{**base.__dict__, "calibration_smooth": 20, "use_drawdown_control": True})),
+        ("+ cal smooth + trend", Config(**{**base.__dict__, "calibration_smooth": 20, "use_trend_strength_filter": True})),
+        ("+ drawdown + trend", Config(**{**base.__dict__, "use_drawdown_control": True, "use_trend_strength_filter": True})),
+        ("+ all three", Config(**{**base.__dict__, "calibration_smooth": 20, "use_drawdown_control": True, "use_trend_strength_filter": True})),
+        ("+ network momentum", Config(**{**base.__dict__, "use_network_momentum": True})),
     ]
 
     results = []
-    for cap in CAPS:
-        for rate in FINANCING_RATES:
-            for label, syms, base_cfg in base_variants:
-                cfg = Config(
-                    **{
-                        **base_cfg.__dict__,
-                        "max_gross_notional": cap,
-                        "financing_rate": rate,
-                    }
-                )
-                print(f"Running {label} | cap={cap} | financing={rate:.1%}...")
-                results.append(_run(label, syms, prices, cfg))
+    for label, cfg in candidates:
+        print(f"Running {label}...")
+        results.append(_run(label, CORE, prices, cfg))
 
     df = pd.DataFrame(results)
+    df = df.sort_values("wf_oos", ascending=False)
+    print("\n\n## Optimization evaluation (3× cap, 1% financing)")
+    print(
+        df[
+            ["label", "net_sharpe", "ann_vol", "max_dd", "mean_gross", "ann_turnover", "wf_is", "wf_oos", "wf_gap"]
+        ].to_string(index=False)
+    )
 
-    print("\n\n## Sensitivity grid — WF OOS Sharpe by cap and financing rate")
-    for label in df["label"].unique():
-        sub = df[df["label"] == label]
-        pivot = sub.pivot(index="financing_rate", columns="max_gross", values="wf_oos")
-        print(f"\n{label}")
-        print(pivot.to_string())
-
-    with open("data/options_evaluation_sensitivity_grid.json", "w") as f:
+    with open("data/options_evaluation_optimizations.json", "w") as f:
         json.dump({"results": results}, f, indent=2, default=str)
-    print("\nSaved data/options_evaluation_sensitivity_grid.json")
+    print("\nSaved data/options_evaluation_optimizations.json")
     return 0
 
 

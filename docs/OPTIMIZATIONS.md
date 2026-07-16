@@ -88,3 +88,26 @@ Added an opt-in filter that de-gears the book when the average absolute combined
 - `signal_engine/cli.py` — new flags + restored missing `--network-momentum` flag.
 - `scripts/reconcile.py` — prints drift decomposition, `--alarm-on-worst-quartile`.
 - `tests/test_backtest.py`, `tests/test_monitor.py`, `tests/test_live_pipeline.py`, `tests/test_cli.py` — coverage.
+
+## Impact assessment (3× gross cap, 1% financing, 2007–2026)
+
+Ran `scripts/eval_optimizations.py` on the financed baseline to see whether the trading levers improve walk-forward OOS Sharpe. None of the combinations clearly beat the baseline, so they remain **diagnostic / opt-in only**.
+
+| Configuration | Net Sharpe | WF OOS Sharpe | Max DD | Mean gross | Ann. turnover |
+|---|---:|---:|---:|---:|---:|
+| Baseline | 0.539 | 0.427 | −33.2% | 2.68× | 0.81 |
+| + drawdown control | 0.510 | 0.417 | −26.2% | 2.04× | 0.67 |
+| + trend-strength filter | 0.536 | 0.428 | −31.4% | 2.60× | 0.86 |
+| + network momentum | 0.543 | 0.422 | −32.9% | 2.70× | 0.90 |
+| + calibration smooth | 0.539 | 0.427 | −33.2% | 2.68× | 0.81 |
+| + drawdown + trend | 0.496 | 0.444 | −26.2% | 2.04× | 0.63 |
+| + drawdown + trend + network mom + smooth | 0.505 | 0.435 | −26.2% | 2.02× | 0.65 |
+
+Takeaways:
+
+- **Drawdown control** works as designed: it lowers realised volatility and maximum drawdown, but also lowers returns, leaving risk-adjusted return roughly unchanged.
+- **Trend-strength filter** is neutral on the full sample and does not fix the 2023–26 weakness with the default starting parameters.
+- **Calibration smoothing** does not change aggregate performance on this dataset because the expanding-window parameters stabilise early and change only at rebal dates.
+- **Network momentum** is essentially unchanged versus the baseline because it was already validated-positive and is on by default in the evaluation universe.
+
+Conclusion: keep the levers available for research and diagnostics, but do **not** enable any of them as defaults without an honest validation bar (Deflated Sharpe, block bootstrap, placebo tests).
