@@ -22,7 +22,7 @@ sys.path.insert(0, str(repo_root))
 from signal_engine.live import (  # noqa: E402
     DEFAULT_KILL_SWITCH_PATH,
     DEFAULT_TARGETS_PATH,
-    load_latest_target,
+    load_latest_target_for_book,
     read_kill_switch,
 )
 
@@ -361,9 +361,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
 
-    target = load_latest_target(args.targets)
+    # The broker only ever trades the CHAMPION book. The last record in the targets
+    # file may be a challenger (they're emitted after the champion each night) —
+    # executing that would silently deploy an unpromoted config.
+    target = load_latest_target_for_book(args.targets, "champion")
     if target is None:
-        print("No target record found.", file=sys.stderr)
+        print("No champion target record found.", file=sys.stderr)
         return 1
 
     kill = read_kill_switch(args.kill_switch)

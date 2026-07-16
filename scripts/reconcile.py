@@ -19,7 +19,7 @@ from signal_engine.live import (  # noqa: E402
     DEFAULT_RECON_DIR,
     DEFAULT_RETURNS_PATH,
     DEFAULT_TARGETS_PATH,
-    load_latest_target,
+    load_latest_target_for_book,
     run_reconciliation,
 )
 
@@ -145,9 +145,15 @@ def main(argv: list[str] | None = None) -> int:
         help="also trip the edge-decay alarm when rolling Sharpe falls into its "
         "own worst quartile (self-calibrating decay detector)",
     )
+    p.add_argument(
+        "--book",
+        default="champion",
+        help="shadow book to reconcile (default: champion — the deployed book; "
+        "NOT simply the last target written, which may be a challenger)",
+    )
     args = p.parse_args(argv)
 
-    target = load_latest_target(args.targets)
+    target = load_latest_target_for_book(args.targets, args.book)
     try:
         res = run_reconciliation(
             target=target,

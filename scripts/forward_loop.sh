@@ -12,11 +12,14 @@ cd "$REPO_ROOT"
 # shellcheck source=/dev/null
 source .venv/bin/activate
 
-# 1. Refresh ETF price cache (yfinance).
-python scripts/warm_cache.py
+# 1. Refresh ETF price cache (yfinance; PIT-stitched). --semis also caches
+#    SMH/SOXX/XSD for the challenger_semis shadow book.
+python scripts/warm_cache.py --semis
 
-# 2. Generate target positions for the next session.
-python scripts/generate_targets.py --source auto
+# 2. Generate target positions for the next session. --challenger-semis runs a
+#    parallel shadow book (champion config + semis pack) to earn FORWARD evidence
+#    for the pack; promotion waits on champion_challenger_report (>=60 days).
+python scripts/generate_targets.py --source auto --challenger-semis
 
 # 3. Mark the shadow return for the day that just closed.
 python scripts/shadow_book.py --source auto

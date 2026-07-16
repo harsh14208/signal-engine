@@ -321,3 +321,76 @@ class TestInputRevision:
         recomputed = pd.DataFrame({"SPY": [15.8, 15.8]}, index=dates)
         rep = input_revision_report(targets, recomputed)
         assert rep["clean"] is True and rep["n_symbols_revised"] == 0
+
+
+class TestChallengerSemis:
+    """The challenger_semis book: champion config + the semis pack, forward-tested."""
+
+    def _prices_with_semis(self, full_prices):
+        from signal_engine.data import synthetic_prices
+
+        extras = synthetic_prices(["SMH", "SOXX", "XSD"], n_days=len(full_prices), seed=9)
+        extras.index = full_prices.index
+        return pd.concat([full_prices, extras], axis=1)
+
+    def test_generate_target_with_extra_symbols(self, tmp_path, full_prices):
+        panel = self._prices_with_semis(full_prices)
+        requested: list[list[str]] = []
+
+        def fake_load_prices(syms, **kwargs):
+            requested.append(list(syms))
+            return panel
+
+        targets = tmp_path / "targets.jsonl"
+        with patch.object(live, "load_prices", side_effect=fake_load_prices):
+            res = generate_target(
+                source="cache",
+                cot=False,
+                targets_path=targets,
+                book="challenger_semis",
+                extra_symbols=["SMH", "SOXX", "XSD"],
+                snapshot=False,
+            )
+
+        record = res["record"]
+        assert record["book"] == "challenger_semis"
+        assert record["universe_extra"] == ["SMH", "SOXX", "XSD"]
+        assert {"SMH", "SOXX", "XSD"} <= set(record["units"])
+        # The price request itself must include the pack.
+        assert {"SMH", "SOXX", "XSD"} <= set(requested[0])
+
+    def test_reconciliation_backtest_uses_target_universe(self, full_prices):
+        from signal_engine.live import build_backtest_for_reconciliation
+
+        panel = self._prices_with_semis(full_prices)
+        requested: list[list[str]] = []
+
+        def fake_load_prices(syms, **kwargs):
+            requested.append(list(syms))
+            return panel
+
+        target = {
+            "date": "2020-01-02",
+            "use_cot": False,
+            "universe_extra": ["SMH", "SOXX", "XSD"],
+        }
+        with patch.object(live, "load_prices", side_effect=fake_load_prices):
+            _, result = build_backtest_for_reconciliation(target, source="cache")
+        assert {"SMH", "SOXX", "XSD"} <= set(requested[0])
+        assert "SMH" in result.forecasts.columns
+
+    def test_executor_ignores_trailing_challenger(self, tmp_path):
+        """The broker must trade the champion even when a challenger is written last —
+        and refuse to run when no champion exists at all."""
+        from scripts.execute_alpaca import main as exec_main
+
+        targets = tmp_path / "targets.jsonl"
+        # Only challenger records → the executor must refuse, not trade the challenger.
+        targets.write_text(
+            json.dumps(
+                {"date": "2026-07-15", "book": "challenger_semis", "units": {"SMH": 10.0}}
+            )
+            + "\n"
+        )
+        rc = exec_main(["--paper", "--targets", str(targets)])
+        assert rc == 1  # "No champion target record found."

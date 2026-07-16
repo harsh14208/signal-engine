@@ -146,6 +146,23 @@ Leave `execute_alpaca.py` commented out in `scripts/forward_loop.sh`. The shadow
 book and reconciliation run without any broker connection, which is the intended
 first stage.
 
+## Forward-testing the semis pack (challenger_semis)
+
+The financing study ranked `--semis` top of the financed OOS table, but that
+ranking is selection-on-OOS under a PBO of 0.80 — not promotion evidence. The
+disciplined path is the same one COT uses: the nightly loop emits a
+**`challenger_semis`** shadow book (champion config + SMH/SOXX/XSD, via
+`generate_targets.py --challenger-semis`; the cache warm adds the pack with
+`warm_cache.py --semis`). Each target stores `universe_extra` so reconciliation
+and replay rebuild the exact same book. Promotion waits on
+`champion_challenger_report` (≥60 forward days and a Sharpe margin) — never on
+backtest rankings.
+
+**Book pinning:** the last record in `live_targets.jsonl` is whichever book was
+emitted last, so `reconcile.py` (via `--book`, default champion) and
+`execute_alpaca.py` (hard-pinned) select the champion explicitly. The broker
+never trades a challenger.
+
 ## Forward-confirming COT (A7)
 
 Every target record stores `use_cot` and `cot_as_of`. As `data/live_returns.csv`

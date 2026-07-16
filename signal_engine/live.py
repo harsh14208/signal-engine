@@ -160,6 +160,7 @@ def build_target_record(
     cot: pd.DataFrame | None = None,
     as_of: str | None = None,
     book: str = "champion",
+    extra_symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a date-stamped target record from the latest backtest row.
 
@@ -186,6 +187,9 @@ def build_target_record(
         "financing_threshold": float(cfg.financing_threshold),
         "max_annual_financing_cost": cfg.max_annual_financing_cost,
         "cot_as_of": latest_cot_as_of(cot),
+        # Instruments added beyond the core universe (e.g. the semis pack) — needed
+        # to rebuild the exact same price panel for reconciliation and replay.
+        "universe_extra": list(extra_symbols) if extra_symbols else [],
         "idm": float(result.idm),
         "fdm": float(result.fdm),
         "governor": float(result.governor.iloc[-1]),
@@ -207,20 +211,25 @@ def generate_target(
     overrides: dict[str, Any] | None = None,
     snapshot: bool = True,
     snapshot_dir: Path | str = DEFAULT_SNAPSHOT_DIR,
+    extra_symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     """Refresh prices, run the validated config, and append a target record.
 
     Idempotent per (date, book): skips if a record for the latest price date and
     the same book already exists.  Pass `book="challenger"` with `overrides`
-    (e.g. ``{"use_cot": False}``) to run a candidate config as a parallel shadow
-    book alongside the champion.  When `snapshot` is set, an immutable point-in-time
-    feature snapshot of the decision inputs is persisted for replay (Phase 3).
+    (e.g. ``{"use_cot": False}``) and/or `extra_symbols` (e.g. the semis pack)
+    to run a candidate config as a parallel shadow book alongside the champion.
+    When `snapshot` is set, an immutable point-in-time feature snapshot of the
+    decision inputs is persisted for replay (Phase 3).
     """
     targets_path = Path(targets_path)
     targets_path.parent.mkdir(parents=True, exist_ok=True)
 
     cfg = validated_config(cot=cot, **(overrides or {}))
     syms = symbols(expanded=False)
+    if extra_symbols:
+        seen = set(syms)
+        syms = syms + [s for s in extra_symbols if s not in seen]
     end = end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     prices = load_prices(syms, start="2007-01-01", end=end, source=source, cache_tag="universe")
     prices = _slice_prices(prices, end=end)
@@ -242,7 +251,12 @@ def generate_target(
     )
     result = run_backtest(prices, cfg, cot=cot_panel)
     record = build_target_record(
-        result, cfg, cot=cot_panel, as_of=prices.index[-1].strftime("%Y-%m-%d"), book=book
+        result,
+        cfg,
+        cot=cot_panel,
+        as_of=prices.index[-1].strftime("%Y-%m-%d"),
+        book=book,
+        extra_symbols=extra_symbols,
     )
 
     latest = load_latest_target_for_book(targets_path, book)
@@ -438,6 +452,11 @@ def build_backtest_for_reconciliation(
     """Return modeled daily returns + full result for the same config as the target."""
     cfg = config_from_target(target) if target is not None else validated_config()
     syms = symbols(expanded=False)
+    # Honor the target's universe additions (e.g. a semis-pack challenger) so the
+    # modeled series is the same book the target actually traded.
+    extra = (target or {}).get("universe_extra") or []
+    seen = set(syms)
+    syms = syms + [s for s in extra if s not in seen]
     end = end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     prices = load_prices(syms, start="2007-01-01", end=end, source=source, cache_tag="universe")
     prices = _slice_prices(prices, end=end)

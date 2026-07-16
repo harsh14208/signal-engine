@@ -79,6 +79,14 @@ def main(argv: list[str] | None = None) -> int:
         help="also emit a parallel 'challenger' shadow book with COT flipped, to "
         "forward-test the COT lever without touching the champion book",
     )
+    p.add_argument(
+        "--challenger-semis",
+        action="store_true",
+        dest="challenger_semis",
+        help="also emit a 'challenger_semis' shadow book = champion config + the "
+        "semis pack (SMH/SOXX/XSD), to earn forward evidence for the pack instead "
+        "of promoting it on backtest rankings (PBO=0.80 caveat)",
+    )
     args = p.parse_args(argv)
 
     overrides = {
@@ -88,7 +96,12 @@ def main(argv: list[str] | None = None) -> int:
         "max_annual_financing_cost": args.max_annual_financing_cost,
     }
 
-    def _emit(book: str, cot: bool, overrides: dict | None = None) -> int:
+    def _emit(
+        book: str,
+        cot: bool,
+        overrides: dict | None = None,
+        extra_symbols: list[str] | None = None,
+    ) -> int:
         try:
             res = generate_target(
                 source=args.source,
@@ -98,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
                 targets_path=args.output,
                 book=book,
                 overrides=overrides,
+                extra_symbols=extra_symbols,
             )
         except Exception as exc:
             print(f"generate_targets ({book}) failed: {exc}", file=sys.stderr)
@@ -125,6 +139,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.challenger:
         # Challenger flips the COT lever relative to the champion.
         rc = _emit("challenger", cot=not champ_cot, overrides=overrides) or rc
+    if args.challenger_semis:
+        # Same config as the champion, plus the semis pack. Promotion waits on
+        # ≥60 days of forward evidence (champion_challenger_report), not backtests.
+        rc = _emit(
+            "challenger_semis",
+            cot=champ_cot,
+            overrides=overrides,
+            extra_symbols=["SMH", "SOXX", "XSD"],
+        ) or rc
     return rc
 
 

@@ -29,12 +29,19 @@ def main(argv: list[str] | None = None) -> int:
         help="discard the cached basis and accept the fresh adjusted history wholesale "
         "(logged to price_revisions.jsonl)",
     )
+    p.add_argument(
+        "--semis",
+        action="store_true",
+        help="also cache the semis pack (SMH/SOXX/XSD) for the challenger_semis book",
+    )
     # Back-compat: `python scripts/warm_cache.py 2010-01-01` (positional start).
     p.add_argument("start_pos", nargs="?", default=None, help=argparse.SUPPRESS)
     args = p.parse_args(argv)
     start = args.start_pos or args.start
 
     syms = symbols()
+    if args.semis:
+        syms = syms + [s for s in ("SMH", "SOXX", "XSD") if s not in syms]
     print(f"Fetching {len(syms)} symbols from {start} via yfinance…")
     px = load_prices(syms, start=start, source="yfinance", rebase=args.rebase)
     print(
