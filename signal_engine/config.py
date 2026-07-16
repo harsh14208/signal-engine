@@ -169,6 +169,10 @@ class Config:
     # the default run_backtest path.
     calibration_min_obs: int = 256
     calibration_rebal: int = 252
+    # Number of days over which to smooth calibration transitions (weights/IDM/FDM).
+    # None = instantaneous jump at each rebal date. A small window (e.g. 10-20)
+    # cuts estimation-driven turnover without adding lookahead.
+    calibration_smooth: int | None = None
     # Gross exposure cap. None = uncapped. Applied after the governor; a value of
     # 1.0 means no leverage, 3.0 means 3× capital in absolute notional.
     max_gross_notional: float | None = None
@@ -181,6 +185,22 @@ class Config:
     # If set, positions are scaled down so expected annual financing
     # (gross above threshold * financing_rate) does not exceed this amount.
     max_annual_financing_cost: float | None = None
+
+    # Drawdown-state control (opt-in). Scales positions down when the strategy
+    # hits a realised drawdown threshold, and scales back up on recovery.
+    use_drawdown_control: bool = False
+    drawdown_threshold: float = 0.10  # e.g. 10% drawdown triggers de-risk
+    drawdown_scale: float = 0.50      # scale positions to 50% when triggered
+    drawdown_recovery: float = 0.05   # re-risk when drawdown recovers to 5%
+
+    # Trend-strength filter (opt-in). De-gears the book when the average absolute
+    # combined forecast falls into the bottom percentile of its recent history — a
+    # response to the 2023-26 weak-trend environment. Must be validated OOS to avoid
+    # overfitting the recent past.
+    use_trend_strength_filter: bool = False
+    trend_strength_window: int = 63
+    trend_strength_threshold: float = 0.25  # bottom quartile
+    trend_strength_scale: float = 0.70      # scale positions to 70% when weak
 
     def __post_init__(self):
         # Backward compatibility: the old boolean flag overrides the scheme.
@@ -239,3 +259,27 @@ class Config:
         if self.financing_rate != 0.0:
             parts.append(f"fin={self.financing_rate:.2%}")
         return " ".join(parts)
+
+    def min_history_required(self) -> int:
+        """Minimum price observations needed for a warm, deterministic restart.
+
+        This is the longest lookback any enabled rule or overlay requires. A
+        restarted loop with fewer observations will produce different indicator
+        state than a continuously-running loop.
+        """
+        lookbacks = [self.calibration_min_obs, GOVERNOR_SPAN, VOL_MIN_PERIODS]
+        if self.use_breakout:
+            lookbacks.extend(self.breakout_spans)
+        for fast, slow in self.ewmac_speeds:
+            lookbacks.append(slow)
+        if self.use_corr_spike:
+            lookbacks.append(self.corr_spike_span)
+        if self.use_hmm_regime_overlay:
+            lookbacks.append(self.hmm_train_window)
+        if self.use_garch_vol:
+            lookbacks.append(self.garch_min_history)
+        if self.use_regime_overlay:
+            lookbacks.append(self.regime_smooth or 1)
+        if self.eq_mom_lookback:
+            lookbacks.append(self.eq_mom_lookback)
+        return max(lookbacks)

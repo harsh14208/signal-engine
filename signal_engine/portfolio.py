@@ -111,6 +111,31 @@ def vol_governor(
     return gov.clip(lo, hi).fillna(1.0)
 
 
+def trend_strength_overlay(
+    forecasts: pd.DataFrame,
+    window: int = 63,
+    threshold: float = 0.25,
+    scale: float = 0.70,
+) -> pd.Series:
+    """De-gear when the average absolute combined forecast is weak.
+
+    The filter is causal: the historical bottom-quartile benchmark is computed
+    from a lagged rolling window, and today's mean absolute forecast is compared
+    to it. If it is in the weak tail, positions are scaled to `scale`.
+
+    This targets low-trend regimes like 2023-26, but the threshold is easy to
+    overfit to recent data — keep opt-in and validate on pre-2023 data only.
+    """
+    if forecasts.empty:
+        return pd.Series(1.0, index=forecasts.index)
+    mean_abs = forecasts.abs().mean(axis=1)
+    # Lagged rolling quantile of mean absolute forecast.
+    bench = mean_abs.shift(1).rolling(window=window, min_periods=max(20, window // 3)).quantile(threshold)
+    mult = pd.Series(scale, index=forecasts.index)
+    mult[mean_abs >= bench] = 1.0
+    return mult.fillna(1.0)
+
+
 def corr_spike_overlay(
     returns: pd.DataFrame,
     span: int = 60,
@@ -147,3 +172,39 @@ def corr_spike_overlay(
         mult = 1.0 - (mean_corr - threshold) / (1.0 - threshold) * (1.0 - max_degross)
     mult = mult.clip(max_degross, 1.0)
     return mult.reindex(returns.index).fillna(1.0)
+
+
+def drawdown_overlay(
+    gross_returns: pd.Series,
+    threshold: float = 0.10,
+    scale: float = 0.50,
+    recovery: float = 0.05,
+) -> pd.Series:
+    """Scale positions down during realised drawdowns and back up on recovery.
+
+    The overlay is causal: the multiplier applied on day t uses the drawdown
+    computed from gross returns only through day t-1. When drawdown (from peak)
+    exceeds `threshold`, exposure is scaled to `scale`. It stays at `scale` until
+    drawdown recovers to `recovery` or below, then returns to 1.0.
+
+    Parameters mirror the research finding that trend strategies tend to recover
+    after deep drawdowns, but the threshold is easy to overfit — keep opt-in.
+    """
+    gr = gross_returns.dropna()
+    if gr.empty:
+        return pd.Series(1.0, index=gross_returns.index)
+    # Cumulative equity and running peak using returns through t-1.
+    equity = (1.0 + gr).cumprod()
+    peak = equity.shift(1).expanding(min_periods=2).max()
+    dd = (equity - peak) / peak  # negative series
+    mult = pd.Series(1.0, index=gr.index)
+    triggered = False
+    for i, (date, value) in enumerate(dd.items()):
+        if i == 0:
+            continue
+        if not triggered and value <= -threshold:
+            triggered = True
+        elif triggered and value >= -recovery:
+            triggered = False
+        mult.iloc[i] = scale if triggered else 1.0
+    return mult.reindex(gross_returns.index).fillna(1.0)

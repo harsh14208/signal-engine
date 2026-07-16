@@ -29,17 +29,21 @@ def rolling_sharpe(daily: pd.Series, window: int = BUSINESS_DAYS_YEAR) -> pd.Ser
 
 
 def edge_decay_report(
-    daily: pd.Series, window: int = BUSINESS_DAYS_YEAR, alarm_floor: float = 0.0
+    daily: pd.Series,
+    window: int = BUSINESS_DAYS_YEAR,
+    alarm_floor: float = 0.0,
+    alarm_on_worst_quartile: bool = False,
 ) -> dict:
     """Summarise the rolling-Sharpe path and raise an alarm if the latest dips
     below `alarm_floor` — a cheap, honest 'is the edge still alive' monitor.
 
-    Two alarms, either fires:
+    Two alarm modes:
       • `alarm_floor` — the crude absolute floor (default: rolling Sharpe < 0).
       • `worst_quartile` — the latest rolling Sharpe sits in the worst quartile of
         its own history. This self-calibrating flag (arXiv 2604.18821) catches a
         *decaying* edge earlier than the absolute floor, and adapts to a strategy
-        whose healthy Sharpe was never far above zero to begin with.
+        whose healthy Sharpe was never far above zero to begin with. Enable it by
+        passing `alarm_on_worst_quartile=True`.
     """
     rs = rolling_sharpe(daily, window).dropna()
     if rs.empty:
@@ -50,6 +54,7 @@ def edge_decay_report(
     # doesn't fire spuriously on a handful of early windows.
     q25 = float(rs.quantile(0.25)) if len(rs) >= 60 else None
     worst_quartile = bool(q25 is not None and current <= q25)
+    alarm = bool(floor_alarm or (alarm_on_worst_quartile and worst_quartile))
     return {
         "window": window,
         "current": current,
@@ -59,9 +64,8 @@ def edge_decay_report(
         "q25": q25,
         "pct_windows_below_zero": float((rs < 0).mean()),
         "alarm_floor": alarm_floor,
-        # `alarm` keeps its original absolute-floor meaning (drives the kill switch);
-        # `worst_quartile` is a softer, self-calibrating early-warning for reports.
-        "alarm": floor_alarm,
+        "alarm_on_worst_quartile": alarm_on_worst_quartile,
+        "alarm": alarm,
         "worst_quartile": worst_quartile,
         "decay_warning": bool(floor_alarm or worst_quartile),
     }
@@ -116,10 +120,55 @@ def decompose_drift(live_returns: pd.Series, backtest_returns: pd.Series) -> dic
     beta, alpha = np.polyfit(x, y, 1)
     resid = y - (alpha + beta * x)
     mean_model = float(df["bt"].mean())
+    alpha_ann = float(alpha * BUSINESS_DAYS_YEAR)
+    beta_gap_ann = float((beta - 1.0) * mean_model * BUSINESS_DAYS_YEAR)
     return {
         "n": int(len(df)),
         "beta": float(beta),
-        "alpha": float(alpha * BUSINESS_DAYS_YEAR),  # annualised unexplained drift
-        "beta_gap": float((beta - 1.0) * mean_model * BUSINESS_DAYS_YEAR),  # replication drift
-        "residual": float(resid.std() * ANNUAL_VOL_SQRT),  # annualised tracking noise
+        "alpha": alpha_ann,
+        "beta_gap": beta_gap_ann,
+        "residual": float(resid.std() * ANNUAL_VOL_SQRT),
+        "total_drift": float(alpha_ann + beta_gap_ann),
     }
+
+
+def implementation_shortfall_components(
+    live_returns: pd.Series,
+    backtest_returns: pd.Series,
+    decision_prices: pd.Series | None = None,
+    arrival_prices: pd.Series | None = None,
+) -> dict:
+    """Perold-style implementation-shortfall decomposition when price data is available.
+
+    Components (all annualised where applicable):
+      • `delay`      — decision close → arrival price (overnight drift before fill).
+      • `opportunity` — arrival price → next close (strategy return after entry).
+      • `execution`  — residual cost not explained by delay/opportunity (spread + impact).
+      • `regression` — the regression-based alpha/beta/residual decomposition above.
+
+    If `decision_prices` or `arrival_prices` are absent, only the regression
+    decomposition is returned.
+    """
+    out = {"regression": decompose_drift(live_returns, backtest_returns)}
+    if decision_prices is None or arrival_prices is None:
+        return out
+
+    shared = live_returns.index.intersection(decision_prices.index).intersection(arrival_prices.index)
+    if len(shared) < 20:
+        out["insufficient_prices"] = True
+        return out
+
+    decision = decision_prices.reindex(shared)
+    arrival = arrival_prices.reindex(shared)
+    # Delay: overnight return from decision close to arrival price.
+    delay_daily = (arrival - decision) / decision
+    # Opportunity: live return minus delay (what the strategy made after entry).
+    opportunity_daily = live_returns.reindex(shared) - delay_daily
+    out["delay"] = float(delay_daily.mean() * BUSINESS_DAYS_YEAR)
+    out["opportunity"] = float(opportunity_daily.mean() * BUSINESS_DAYS_YEAR)
+    # Execution residual: what is left of the live-vs-model drift after delay.
+    diff = (live_returns - backtest_returns).reindex(shared)
+    out["execution_residual"] = float(
+        (diff.mean() - delay_daily.mean()) * BUSINESS_DAYS_YEAR
+    )
+    return out

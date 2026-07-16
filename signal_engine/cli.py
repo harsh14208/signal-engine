@@ -58,6 +58,11 @@ flag taxonomy (validated 2026-07-15 — promote on the walk-forward, never one s
   LEVERAGE-DEPENDENT — require --financing-rate for honest comparison:
       --diversifier-pack --rate-pack  (bond packs; edge shrinks under realistic financing)
       --weight-scheme corr_cluster    (concentrates in low-vol instruments; OOS 0.54→0.41 at 1% financing)
+  NEW OPT-IN OVERLAYS (validate before promoting):
+      --drawdown-control              (de-risk on deep drawdowns; easy to overfit threshold)
+      --trend-strength-filter         (de-gear when combined forecasts are historically weak)
+      --calibration-smooth N          (blend weights/IDM/FDM transitions to cut turnover)
+      --alarm-on-worst-quartile       (self-calibrating edge-decay kill switch)
   VALIDATION / DIAGNOSTICS: --validate --oos --walk-forward --diagnostics
       --monitor --n-trials --placebo
 """
@@ -99,6 +104,7 @@ def build_config(args) -> Config:
         cost_bps=args.cost_bps,
         cost_scheme=args.cost_scheme,
         buffer_fraction=args.buffer,
+        calibration_smooth=args.calibration_smooth,
         weight_scheme=args.weight_scheme,
         cluster_weights=args.cluster_weights,
         use_governor=not args.no_governor,
@@ -117,6 +123,14 @@ def build_config(args) -> Config:
         financing_rate=args.financing_rate,
         financing_threshold=args.financing_threshold,
         max_annual_financing_cost=args.max_annual_financing_cost,
+        use_drawdown_control=args.use_drawdown_control,
+        drawdown_threshold=args.drawdown_threshold,
+        drawdown_scale=args.drawdown_scale,
+        drawdown_recovery=args.drawdown_recovery,
+        use_trend_strength_filter=args.use_trend_strength_filter,
+        trend_strength_window=args.trend_strength_window,
+        trend_strength_threshold=args.trend_strength_threshold,
+        trend_strength_scale=args.trend_strength_scale,
         use_garch_vol=args.use_garch_vol,
         garch_weight=args.garch_weight,
         garch_min_history=args.garch_min_history,
@@ -462,6 +476,13 @@ def main(argv=None) -> int:
         help="flat 1.5 bps or per-instrument spreads",
     )
     p.add_argument("--buffer", type=float, default=0.30)
+    p.add_argument(
+        "--calibration-smooth",
+        type=int,
+        default=None,
+        dest="calibration_smooth",
+        help="smooth weights/IDM/FDM transitions over N days to cut estimation-driven turnover",
+    )
     p.add_argument("--no-breakout", action="store_true")
     p.add_argument(
         "--weight-scheme",
@@ -697,6 +718,17 @@ def main(argv=None) -> int:
         help="A/B research: flip the COT sign to momentum (follow specs) vs contrarian",
     )
     p.add_argument(
+        "--network-momentum",
+        action="store_true",
+        dest="use_network_momentum",
+        help="lead-lag price-graph momentum signal (opt-in; validated positive)",
+    )
+    p.add_argument("--nm-speed", type=int, nargs=2, default=(32, 128), dest="nm_speed")
+    p.add_argument("--nm-lookback", type=int, default=256, dest="nm_lookback")
+    p.add_argument("--nm-lag", type=int, default=1, dest="nm_lag")
+    p.add_argument("--nm-rebal", type=int, default=63, dest="nm_rebal")
+    p.add_argument("--nm-top-k", type=int, default=3, dest="nm_top_k")
+    p.add_argument(
         "--core-commodities",
         action="store_true",
         dest="core_commodities",
@@ -769,6 +801,60 @@ def main(argv=None) -> int:
         default=None,
         dest="max_annual_financing_cost",
         help="hard cap on annual financing cost as a fraction of capital (e.g. 0.02 = 2%%/year)",
+    )
+    p.add_argument(
+        "--drawdown-control",
+        action="store_true",
+        dest="use_drawdown_control",
+        help="opt-in drawdown-state control: de-risk on deep drawdowns, re-risk on recovery",
+    )
+    p.add_argument(
+        "--drawdown-threshold",
+        type=float,
+        default=0.10,
+        dest="drawdown_threshold",
+        help="drawdown level that triggers de-risk (default 0.10 = 10%%)",
+    )
+    p.add_argument(
+        "--drawdown-scale",
+        type=float,
+        default=0.50,
+        dest="drawdown_scale",
+        help="position scaling when drawdown control is active (default 0.50 = 50%%)",
+    )
+    p.add_argument(
+        "--drawdown-recovery",
+        type=float,
+        default=0.05,
+        dest="drawdown_recovery",
+        help="drawdown recovery level that re-risks positions (default 0.05 = 5%%)",
+    )
+    p.add_argument(
+        "--trend-strength-filter",
+        action="store_true",
+        dest="use_trend_strength_filter",
+        help="opt-in trend-strength filter: de-gear when average absolute forecast is weak",
+    )
+    p.add_argument(
+        "--trend-strength-window",
+        type=int,
+        default=63,
+        dest="trend_strength_window",
+        help="lookback window for trend-strength historical benchmark (default 63)",
+    )
+    p.add_argument(
+        "--trend-strength-threshold",
+        type=float,
+        default=0.25,
+        dest="trend_strength_threshold",
+        help="bottom percentile of recent forecast strength that triggers de-risk (default 0.25)",
+    )
+    p.add_argument(
+        "--trend-strength-scale",
+        type=float,
+        default=0.70,
+        dest="trend_strength_scale",
+        help="position scaling when trend strength is weak (default 0.70 = 70%%)",
     )
     args = p.parse_args(argv)
     if args.ship_candidate:

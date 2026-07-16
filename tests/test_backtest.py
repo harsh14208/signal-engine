@@ -61,6 +61,50 @@ def test_max_annual_financing_cost_scales_positions(full_prices):
     assert tight.daily_returns.abs().mean() <= loose.daily_returns.abs().mean() + 1e-9
 
 
+def test_calibration_smooth_reduces_turnover(full_prices):
+    abrupt = run_backtest(full_prices, Config(calibration_smooth=None))
+    smooth = run_backtest(full_prices, Config(calibration_smooth=20))
+    # Smoothing should not change gross exposure much but should cut turnover.
+    assert smooth.turnover.sum() <= abrupt.turnover.sum() + 1e-9
+    # Realised vol should stay in a similar band.
+    assert abs(smooth.daily_returns.std() * 16 - abrupt.daily_returns.std() * 16) < 0.05
+
+
+def test_drawdown_control_reduces_exposure_in_drawdown(full_prices):
+    base = run_backtest(full_prices, Config(use_governor=True))
+    dd = run_backtest(
+        full_prices,
+        Config(
+            use_governor=True,
+            use_drawdown_control=True,
+            drawdown_threshold=0.05,
+            drawdown_scale=0.50,
+            drawdown_recovery=0.02,
+        ),
+    )
+    # Drawdown control should reduce average gross exposure and max drawdown.
+    assert dd.gross_exposure.mean() <= base.gross_exposure.mean() + 1e-9
+    assert dd.equity.min() >= base.equity.min() - 1e-6
+
+
+def test_trend_strength_filter_reduces_exposure_when_weak(full_prices):
+    base = run_backtest(full_prices, Config(use_governor=True))
+    ts = run_backtest(
+        full_prices,
+        Config(
+            use_governor=True,
+            use_trend_strength_filter=True,
+            trend_strength_window=20,
+            trend_strength_threshold=0.25,
+            trend_strength_scale=0.50,
+        ),
+    )
+    # Trend-strength filter should reduce average gross exposure.
+    assert ts.gross_exposure.mean() <= base.gross_exposure.mean() + 1e-9
+    # Realised vol should not blow up.
+    assert ts.daily_returns.std() * 16 < 0.50
+
+
 def test_per_instrument_cost_scheme_reduces_net_more(result, full_prices):
     flat = run_backtest(full_prices, Config(cost_scheme="flat"))
     inst = run_backtest(full_prices, Config(cost_scheme="instrument"))

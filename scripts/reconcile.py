@@ -52,11 +52,30 @@ def _fmt_report(report: dict) -> str:
         lines.append("- Insufficient live data.")
     else:
         alarm = "⚠ ALARM" if edge["alarm"] else "✅ healthy"
+        wq = edge.get("worst_quartile")
+        wq_note = f"  worst_quartile={'yes' if wq else 'no'}" if wq is not None else ""
         lines.append(
             f"- current **{edge['current']:.2f}**  median {edge['median']:.2f}  "
             f"min {edge['min']:.2f}  max {edge['max']:.2f}  "
-            f"% windows <0: {edge['pct_windows_below_zero']:.0%}  ({alarm})"
+            f"% windows <0: {edge['pct_windows_below_zero']:.0%}{wq_note}  ({alarm})"
         )
+    decomp = rec.get("drift_decomposition") or {}
+    if not decomp.get("insufficient"):
+        lines.append("")
+        lines.append("## Drift decomposition (implementation shortfall)\n")
+        lines.append(
+            f"- total drift {decomp.get('total_drift', 0):.2%}: "
+            f"alpha {decomp.get('alpha', 0):.2%} + beta_gap {decomp.get('beta_gap', 0):.2%}"
+        )
+        lines.append(
+            f"- beta={decomp.get('beta', 0):.2f}  residual={decomp.get('residual', 0):.2%}"
+        )
+        if "delay" in decomp:
+            lines.append(
+                f"- Perold components: delay {decomp['delay']:.2%}, "
+                f"opportunity {decomp['opportunity']:.2%}, "
+                f"execution residual {decomp['execution_residual']:.2%}"
+            )
     rev = report.get("input_revision")
     if rev is not None:
         lines.append("")
@@ -119,6 +138,13 @@ def main(argv: list[str] | None = None) -> int:
         default=0.0,
         help="rolling-Sharpe floor that trips the edge-decay alarm",
     )
+    p.add_argument(
+        "--alarm-on-worst-quartile",
+        action="store_true",
+        dest="alarm_on_worst_quartile",
+        help="also trip the edge-decay alarm when rolling Sharpe falls into its "
+        "own worst quartile (self-calibrating decay detector)",
+    )
     args = p.parse_args(argv)
 
     target = load_latest_target(args.targets)
@@ -130,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
             recon_dir=args.recon_dir,
             kill_switch_path=args.kill_switch,
             alarm_floor=args.alarm_floor,
+            alarm_on_worst_quartile=args.alarm_on_worst_quartile,
             targets_path=args.targets,
         )
     except Exception as exc:

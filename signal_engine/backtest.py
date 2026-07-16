@@ -29,7 +29,15 @@ from .forecast import (
     pooled_rule_correlation,
 )
 from .markets import cost_per_symbol, instrument_for
-from .portfolio import apply_buffer, corr_spike_overlay, estimate_idm, position_units, vol_governor
+from .portfolio import (
+    apply_buffer,
+    corr_spike_overlay,
+    drawdown_overlay,
+    estimate_idm,
+    position_units,
+    trend_strength_overlay,
+    vol_governor,
+)
 from .rules import (
     acceleration_forecast,
     carry_forecast,
@@ -265,6 +273,17 @@ def _execute_backtest(
         }
     )
 
+    # Trend-strength filter: de-gear when combined forecasts are historically weak.
+    ts_overlay = pd.Series(1.0, index=index)
+    if config.use_trend_strength_filter:
+        ts_overlay = trend_strength_overlay(
+            forecasts,
+            window=config.trend_strength_window,
+            threshold=config.trend_strength_threshold,
+            scale=config.trend_strength_scale,
+        )
+        raw_units = raw_units.mul(ts_overlay, axis=0)
+
     # Correlation-spike de-risking overlay.
     if config.use_corr_spike:
         overlay = corr_spike_overlay(
@@ -300,6 +319,31 @@ def _execute_backtest(
     else:
         governor = pd.Series(1.0, index=index)
         governed = raw_units
+
+    # Drawdown-state control overlay (post-governor, pre-cap; causal on lagged gross returns).
+    dd_overlay = pd.Series(1.0, index=index)
+    if config.use_drawdown_control:
+        # Use the governor pre-pass gross returns if available; otherwise compute a
+        # quick pre-cost gross return series from the governed units (shifted).
+        gross_for_dd = (
+            sim_raw["gross"]
+            if config.use_governor
+            else (
+                governed.shift(1)
+                .mul(returns)
+                .mul(mult, axis=1)
+                .sum(axis=1)
+                .div(config.capital)
+                .fillna(0.0)
+            )
+        )
+        dd_overlay = drawdown_overlay(
+            gross_for_dd,
+            threshold=config.drawdown_threshold,
+            scale=config.drawdown_scale,
+            recovery=config.drawdown_recovery,
+        )
+        governed = governed.mul(dd_overlay, axis=0)
 
     # Gross notional exposure cap (post-governor, pre-buffer; no lookahead).
     target_notional = governed.abs().mul(prices).mul(mult, axis=1)
@@ -379,6 +423,33 @@ def _execute_backtest(
     )
 
 
+def _smooth_parameter_transitions(df: pd.DataFrame, window: int) -> pd.DataFrame:
+    """Blend parameter changes over `window` rows to cut estimation-driven churn.
+
+    Each time a column's value changes, the next `window` observations are
+    linearly interpolated from the old value to the new value. This is causal and
+    lookahead-free: the transition only uses information available at the change.
+    """
+    if window <= 1 or df.empty:
+        return df
+    out = df.copy()
+    for col in df.columns:
+        s = df[col].to_numpy(dtype=float).copy()
+        # Find indices where value changes from previous row.
+        change_idx = np.where(np.concatenate(([False], np.diff(s, prepend=s[0]) != 0)))[0]
+        for idx in change_idx:
+            if idx == 0:
+                continue
+            old_val = s[idx - 1]
+            new_val = s[idx]
+            end = min(idx + window, len(s))
+            n = end - idx
+            blend = np.linspace(old_val, new_val, n + 1)[1:]
+            s[idx:end] = blend
+        out[col] = s
+    return out
+
+
 def _expanding_calibration(
     prices: pd.DataFrame,
     returns: pd.DataFrame,
@@ -443,6 +514,15 @@ def _expanding_calibration(
     if fdm_records:
         fdm_series.update(pd.Series(fdm_records))
         fdm_series = fdm_series.ffill().fillna(1.0)
+
+    if config.calibration_smooth:
+        weights_df = _smooth_parameter_transitions(weights_df, config.calibration_smooth)
+        idm_series = _smooth_parameter_transitions(
+            idm_series.to_frame("idm"), config.calibration_smooth
+        ).iloc[:, 0]
+        fdm_series = _smooth_parameter_transitions(
+            fdm_series.to_frame("fdm"), config.calibration_smooth
+        ).iloc[:, 0]
 
     return weights_df, idm_series, fdm_series
 

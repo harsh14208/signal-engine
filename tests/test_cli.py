@@ -105,6 +105,7 @@ def _args(**kwargs) -> object:
         "cost_bps": 1.5,
         "cost_scheme": "flat",
         "buffer": 0.30,
+        "calibration_smooth": None,
         "weight_scheme": "equal",
         "cluster_weights": False,
         "no_governor": False,
@@ -137,6 +138,14 @@ def _args(**kwargs) -> object:
         "financing_rate": 0.0,
         "financing_threshold": 1.0,
         "max_annual_financing_cost": None,
+        "use_drawdown_control": False,
+        "drawdown_threshold": 0.10,
+        "drawdown_scale": 0.50,
+        "drawdown_recovery": 0.05,
+        "use_trend_strength_filter": False,
+        "trend_strength_window": 63,
+        "trend_strength_threshold": 0.25,
+        "trend_strength_scale": 0.70,
     }
     defaults.update(kwargs)
     return type("Args", (), defaults)()

@@ -226,6 +226,12 @@ def generate_target(
     prices = _slice_prices(prices, end=end)
     if prices.empty or len(prices) < 2:
         raise RuntimeError("No price data available for target generation")
+    min_hist = cfg.min_history_required()
+    if len(prices) < min_hist:
+        raise RuntimeError(
+            f"Insufficient history for a deterministic restart: {len(prices)} rows, "
+            f"{min_hist} required (config: {cfg.describe()})"
+        )
 
     cot_panel = (
         _build_cot_forecast_panel_with_fallback(
@@ -590,6 +596,7 @@ def run_reconciliation(
     recon_dir: Path | str = DEFAULT_RECON_DIR,
     kill_switch_path: Path | str = DEFAULT_KILL_SWITCH_PATH,
     alarm_floor: float = 0.0,
+    alarm_on_worst_quartile: bool = False,
     targets_path: Path | str = DEFAULT_TARGETS_PATH,
 ) -> dict[str, Any]:
     """Generate a reconciliation report, persist it, and update the kill-switch."""
@@ -614,7 +621,7 @@ def run_reconciliation(
     )
     modeled = result.gross_returns if compare_gross else modeled_series
     rec = reconcile(live, modeled)
-    edge = edge_decay_report(live, alarm_floor=alarm_floor)
+    edge = edge_decay_report(live, alarm_floor=alarm_floor, alarm_on_worst_quartile=alarm_on_worst_quartile)
 
     # Data-honesty check: did the inputs get revised under recently-stored decisions?
     # (Engine drift is Phase-3 replay's job; this catches upstream data rewrites.)

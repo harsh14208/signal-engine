@@ -75,6 +75,20 @@ class TestConfigAndRecords:
 
 
 class TestGenerateTarget:
+    def test_generate_target_rejects_insufficient_history(self, tmp_path, full_prices, cot_panel):
+        targets = tmp_path / "targets.jsonl"
+        # Slice to fewer rows than the config requires for a warm restart.
+        short_prices = full_prices.iloc[:50]
+        with patch.object(live, "load_prices", return_value=short_prices):
+            with pytest.raises(RuntimeError, match="Insufficient history"):
+                generate_target(
+                    source="cache",
+                    cot=False,
+                    refresh_cot=False,
+                    targets_path=targets,
+                    snapshot_dir=tmp_path / "snaps",
+                )
+
     def test_generate_target_writes_and_is_idempotent(self, tmp_path, full_prices, cot_panel):
         targets = tmp_path / "targets.jsonl"
         with patch.object(live, "load_prices", return_value=full_prices):

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from signal_engine import monitor
 
@@ -27,6 +28,23 @@ def test_edge_decay_report_keys_and_alarm():
     assert bad["alarm"] is True
 
 
+def test_edge_decay_worst_quartile_alarm():
+    rng = np.random.default_rng(7)
+    # First 1200 days: healthy positive Sharpe; last 300: decayed but still positive.
+    healthy = rng.normal(0.0015, 0.007, 1200)
+    decayed = rng.normal(0.0001, 0.007, 300)
+    daily = pd.Series(np.concatenate([healthy, decayed]))
+    # Absolute floor should not alarm (still positive).
+    floor_only = monitor.edge_decay_report(daily, window=252, alarm_floor=0.0)
+    assert floor_only["alarm"] is False
+    # Worst-quartile flag should alarm because recent Sharpe is in bottom quartile.
+    wq = monitor.edge_decay_report(
+        daily, window=252, alarm_floor=0.0, alarm_on_worst_quartile=True
+    )
+    assert wq["worst_quartile"] is True
+    assert wq["alarm"] is True
+
+
 def test_reconcile_perfect_match():
     bt = _daily(seed=1)
     rep = monitor.reconcile(bt.copy(), bt.copy())
@@ -46,3 +64,20 @@ def test_reconcile_detects_divergence():
 def test_reconcile_insufficient():
     s = pd.Series([0.01, -0.01, 0.0])
     assert monitor.reconcile(s, s).get("insufficient")
+
+
+def test_decompose_drift_reconstructs_total():
+    bt = _daily(seed=3)
+    live = bt * 0.9 + 0.0002
+    decomp = monitor.decompose_drift(live, bt)
+    assert not decomp.get("insufficient")
+    assert decomp["total_drift"] == pytest.approx(decomp["alpha"] + decomp["beta_gap"], rel=1e-6)
+    assert decomp["beta"] < 1.0  # live is under-replicated
+
+
+def test_implementation_shortfall_components_fallback_without_prices():
+    bt = _daily(seed=4)
+    live = bt + _daily(mean=0.0, vol=0.005, seed=5)
+    comp = monitor.implementation_shortfall_components(live, bt)
+    assert "regression" in comp
+    assert "delay" not in comp
