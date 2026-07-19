@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
+
+from signal_engine.evaluator import TradeEvaluation
 
 
 class TestGrossScaleFactor:
@@ -63,3 +66,210 @@ class TestZeroCross:
         rec = res["submitted"][0]
         assert rec["zero_cross_deferred"] is True
         assert rec["target_shares"] == 0
+
+
+class TestAiEvaluator:
+    """AI evaluator integration in execute_targets."""
+
+    def _mock_broker(self, ea):
+        return (
+            patch.object(ea, "_credentials", return_value=("k", "s")),
+            patch.object(ea, "cancel_all_orders", return_value=None),
+            patch.object(ea, "get_account", return_value={"equity": "1000000"}),
+            patch.object(ea, "get_positions", return_value=[]),
+            patch.object(ea, "is_shortable", return_value=True),
+        )
+
+    def test_advisory_mode_logs_but_does_not_change_targets(self, tmp_path):
+        import scripts.execute_alpaca as ea
+
+        target = {"date": "2026-07-19", "units": {"SPY": 100.0}, "notional": {"SPY": 50000.0}}
+        orders: list = []
+
+        def fake_order(base, key, secret, symbol, qty, side):
+            orders.append((symbol, qty, side))
+            return {"id": "test-id"}
+
+        class AdvisoryEvaluator:
+            def evaluate(self, context):
+                return TradeEvaluation(decision="approve", scale=0.5, confidence=0.8, reasoning="test")
+
+        with self._mock_broker(ea)[0], self._mock_broker(ea)[1], self._mock_broker(ea)[2], self._mock_broker(ea)[3], self._mock_broker(ea)[4], patch.object(
+            ea, "place_qty_order", side_effect=fake_order
+        ):
+            res = ea.execute_targets(
+                target=target,
+                live=False,
+                orders_path=tmp_path / "orders.jsonl",
+                kill_switch={"paused": False},
+                ai_evaluator=AdvisoryEvaluator(),
+                ai_mode="advisory",
+                ai_evaluations_path=tmp_path / "ai.jsonl",
+            )
+
+        assert orders == [("SPY", 100, "buy")]
+        assert res["ai_scale"] == 1.0
+        assert res["ai_evaluation"]["reasoning"] == "test"
+        rec = res["submitted"][0]
+        assert rec["ai_evaluation"]["scale"] == 0.5
+        assert rec["ai_mode"] == "advisory"
+        assert rec["ai_scale"] == 1.0  # advisory does not change sizes
+
+    def test_scale_mode_reduces_target_sizes(self, tmp_path):
+        import scripts.execute_alpaca as ea
+
+        target = {"date": "2026-07-19", "units": {"SPY": 100.0}, "notional": {"SPY": 50000.0}}
+        orders: list = []
+
+        def fake_order(base, key, secret, symbol, qty, side):
+            orders.append((symbol, qty, side))
+            return {"id": "test-id"}
+
+        class ScaleEvaluator:
+            def evaluate(self, context):
+                return TradeEvaluation(decision="approve", scale=0.5, confidence=0.8, reasoning="half size")
+
+        with self._mock_broker(ea)[0], self._mock_broker(ea)[1], self._mock_broker(ea)[2], self._mock_broker(ea)[3], self._mock_broker(ea)[4], patch.object(
+            ea, "place_qty_order", side_effect=fake_order
+        ):
+            res = ea.execute_targets(
+                target=target,
+                live=False,
+                orders_path=tmp_path / "orders.jsonl",
+                kill_switch={"paused": False},
+                ai_evaluator=ScaleEvaluator(),
+                ai_mode="scale",
+                ai_evaluations_path=tmp_path / "ai.jsonl",
+            )
+
+        assert orders == [("SPY", 50, "buy")]
+        assert res["ai_scale"] == 0.5
+        rec = res["submitted"][0]
+        assert rec["target_shares"] == 50
+        assert rec["ai_scale"] == 0.5
+
+    def test_ai_mode_block_choice_no_longer_accepted(self, capsys):
+        # "block" was removed from the CLI entirely — AI guidance can resize
+        # (scale) or just log (advisory) an assessment, but there is no mode
+        # that skips a rebalance based on it. argparse rejects an invalid
+        # --ai-mode choice (and exits) before any broker/network code runs.
+        import scripts.execute_alpaca as ea
+
+        with pytest.raises(SystemExit):
+            ea.main(["--ai-mode", "block"])
+        assert "invalid choice: 'block'" in capsys.readouterr().err
+
+    def test_reject_decision_does_not_block_rebalance(self, tmp_path):
+        # A "reject" decision from the evaluator is advisory (logged for human
+        # review) and has no effect on execution — even in "scale" mode, only
+        # `scale` changes what gets submitted. This replaces the old
+        # test_block_mode_skips_rebalance_on_reject, which asserted the
+        # opposite behavior for a mode ("block") that no longer exists.
+        import scripts.execute_alpaca as ea
+
+        target = {"date": "2026-07-19", "units": {"SPY": 100.0}, "notional": {"SPY": 50000.0}}
+        orders: list = []
+
+        def fake_order(base, key, secret, symbol, qty, side):
+            orders.append((symbol, qty, side))
+            return {"id": "test-id"}
+
+        class RejectEvaluator:
+            def evaluate(self, context):
+                return TradeEvaluation(decision="reject", scale=0.5, confidence=0.9, reasoning="too risky")
+
+        with self._mock_broker(ea)[0], self._mock_broker(ea)[1], self._mock_broker(ea)[2], self._mock_broker(ea)[3], self._mock_broker(ea)[4], patch.object(
+            ea, "place_qty_order", side_effect=fake_order
+        ):
+            res = ea.execute_targets(
+                target=target,
+                live=False,
+                orders_path=tmp_path / "orders.jsonl",
+                kill_switch={"paused": False},
+                ai_evaluator=RejectEvaluator(),
+                ai_mode="scale",
+                ai_evaluations_path=tmp_path / "ai.jsonl",
+            )
+
+        # Not skipped: a "reject" decision never halts the rebalance. Its
+        # scale (0.5) is still applied, same as any other evaluation.
+        assert res["skipped"] is False
+        assert orders == [("SPY", 50, "buy")]
+        assert res["ai_scale"] == 0.5
+        assert res["ai_evaluation"]["reasoning"] == "too risky"
+        ai_log = tmp_path / "ai.jsonl"
+        assert ai_log.exists()
+        record = json.loads(ai_log.read_text().strip().splitlines()[0])
+        assert record["applied"] is True
+        assert record["evaluation"]["reasoning"] == "too risky"
+
+    def test_no_evaluator_stores_none(self, tmp_path):
+        import scripts.execute_alpaca as ea
+
+        target = {"date": "2026-07-19", "units": {"SPY": 100.0}, "notional": {"SPY": 50000.0}}
+        orders: list = []
+
+        def fake_order(base, key, secret, symbol, qty, side):
+            orders.append((symbol, qty, side))
+            return {"id": "test-id"}
+
+        with self._mock_broker(ea)[0], self._mock_broker(ea)[1], self._mock_broker(ea)[2], self._mock_broker(ea)[3], self._mock_broker(ea)[4], patch.object(
+            ea, "place_qty_order", side_effect=fake_order
+        ):
+            res = ea.execute_targets(
+                target=target,
+                live=False,
+                orders_path=tmp_path / "orders.jsonl",
+                kill_switch={"paused": False},
+            )
+
+        assert orders == [("SPY", 100, "buy")]
+        assert res["ai_evaluation"] is None
+        assert res["ai_scale"] == 1.0
+
+    def test_scale_mode_with_zero_scale_closes_positions(self, tmp_path):
+        import scripts.execute_alpaca as ea
+
+        target = {"date": "2026-07-19", "units": {"SPY": 100.0}, "notional": {"SPY": 50000.0}}
+        orders: list = []
+
+        def fake_order(base, key, secret, symbol, qty, side):
+            orders.append((symbol, qty, side))
+            return {"id": "test-id"}
+
+        class ZeroEvaluator:
+            def evaluate(self, context):
+                return TradeEvaluation(decision="approve", scale=0.0, confidence=0.9, reasoning="flat")
+
+        with self._mock_broker(ea)[0], self._mock_broker(ea)[1], self._mock_broker(ea)[2], self._mock_broker(ea)[3], self._mock_broker(ea)[4], patch.object(
+            ea, "place_qty_order", side_effect=fake_order
+        ):
+            res = ea.execute_targets(
+                target=target,
+                live=False,
+                orders_path=tmp_path / "orders.jsonl",
+                kill_switch={"paused": False},
+                ai_evaluator=ZeroEvaluator(),
+                ai_mode="scale",
+            )
+
+        # Target scaled to 0; no current position, so no trade needed.
+        assert orders == []
+        assert res["ai_scale"] == 0.0
+
+
+class TestAiCliDefaults:
+    """CLI argument defaults for AI evaluation."""
+
+    def test_no_ai_evaluate_flag_exists(self):
+        import scripts.execute_alpaca as ea
+
+        # --no-ai-evaluate must be a valid flag.
+        with pytest.raises(SystemExit):
+            ea.main(["--no-ai-evaluate", "--help"])
+
+    def test_ai_mode_defaults_to_scale(self):
+        import scripts.execute_alpaca as ea
+
+        with pytest.raises(SystemExit):
+            ea.main(["--help"])

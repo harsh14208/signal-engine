@@ -19,12 +19,20 @@ from typing import Any
 repo_root = Path(__file__).parent.parent
 sys.path.insert(0, str(repo_root))
 
+from signal_engine.evaluator import (  # noqa: E402
+    TradeEvaluator,
+    build_evaluation_context,
+    format_evaluation_for_logging,
+    make_evaluator,
+)
 from signal_engine.live import (  # noqa: E402
     DEFAULT_KILL_SWITCH_PATH,
     DEFAULT_TARGETS_PATH,
     load_latest_target_for_book,
     read_kill_switch,
 )
+
+DEFAULT_AI_EVALUATIONS_PATH = repo_root / "data" / "ai_evaluations.jsonl"
 
 PAPER_BASE = "https://paper-api.alpaca.markets"
 LIVE_BASE = "https://api.alpaca.markets"
@@ -228,6 +236,9 @@ def execute_targets(
     equity_ref_halflife: float = 0.0,
     equity_ref_path: Path | str = repo_root / "data" / "equity_ref.json",
     use_cash_balance: bool = False,
+    ai_evaluator: TradeEvaluator | None = None,
+    ai_mode: str = "scale",
+    ai_evaluations_path: Path | str = DEFAULT_AI_EVALUATIONS_PATH,
 ) -> dict[str, Any]:
     orders_path = Path(orders_path)
     orders_path.parent.mkdir(parents=True, exist_ok=True)
@@ -236,6 +247,39 @@ def execute_targets(
         kill_switch = read_kill_switch()
     if kill_switch.get("paused"):
         return {"submitted": [], "skipped": True, "reason": "kill_switch_engaged"}
+
+    # Idempotency guard: if this exact target (same target_date + generated_at)
+    # has already been executed and logged, don't submit again. Without this,
+    # any accidental re-invocation for the same target — a scheduler misfire,
+    # a manual re-run, a supervisor restart after a slow-but-successful prior
+    # run — re-submits every order from scratch. This isn't hypothetical: the
+    # broker_orders.jsonl log shows one real batch (2026-07-10) with 57
+    # records instead of 19, because 51 non-skipped orders were each
+    # independently submitted to Alpaca three times (three distinct order
+    # IDs per symbol, not just duplicate log lines) — silently tripling
+    # position sizes in the paper book that day. `live=False` for that batch
+    # meant no real capital was at risk, but the same gap applies to live
+    # runs, and even in paper mode it corrupts the book being used to
+    # validate the strategy.
+    target_date = target.get("date")
+    target_generated_at = target.get("generated_at")
+    if target_date and target_generated_at and orders_path.exists():
+        with open(orders_path, "r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    prior = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if prior.get("target_date") == target_date and prior.get("generated_at") == target_generated_at:
+                    return {
+                        "submitted": [],
+                        "skipped": True,
+                        "reason": "already_executed",
+                        "target_date": target_date,
+                        "generated_at": target_generated_at,
+                    }
 
     key, secret = _credentials(live)
     base = LIVE_BASE if live else PAPER_BASE
@@ -246,8 +290,11 @@ def execute_targets(
 
     # Down-scale the (leveraged long/short) book to a gross-exposure budget so the long
     # leg doesn't blow through the paper account's buying power. By default anchored to
-    # live equity; with --use-cash-balance, anchor to cash so no margin/borrowed funds
-    # are used.
+    # live equity; with --use-cash-balance, anchor to cash instead so the LONG leg is
+    # fully cash-paid and total gross exposure is capped more conservatively. Note this
+    # does NOT eliminate margin usage outright: any short leg (routine for this
+    # long/short trend book) still draws Reg-T margin buying power to hold the short,
+    # regardless of what the notional cap is anchored to.
     account = get_account(base, key, secret)
     equity = float(account.get("equity") or account.get("portfolio_value") or 0.0)
     cash = float(account.get("cash") or equity)
@@ -270,6 +317,53 @@ def execute_targets(
         if v is not None
     }
     all_syms = sorted(set(target_shares) | set(current))
+
+    # AI trade evaluation: review the proposed portfolio before any orders go out.
+    # Advisory only — this can resize the target book (ai_mode="scale") or just
+    # log its assessment (ai_mode="advisory"), but it can never skip or block a
+    # rebalance outright. There used to be an ai_mode="block" path that returned
+    # early with zero orders submitted on an AI "reject" decision; it's removed
+    # (see the ai_blocked handling this replaced, in prior versions of this
+    # function) so AI guidance can never prevent trades from executing.
+    evaluation = None
+    ai_scale = 1.0
+    if ai_evaluator is not None:
+        order_deltas = {
+            sym: (target_shares.get(sym, 0) - round(current.get(sym, 0.0)))
+            for sym in all_syms
+        }
+        engine_state = {
+            "idm": target.get("idm"),
+            "fdm": target.get("fdm"),
+            "governor": target.get("governor"),
+            "buffer_fraction": target.get("buffer_fraction"),
+            "vol_target": target.get("vol_target"),
+            "use_cot": target.get("use_cot"),
+        }
+        risk = {
+            "gross_notional": sum(abs(float(v)) for v in (target.get("notional") or {}).values() if v is not None),
+            "gross_scale_applied": round(scale, 4),
+            "n_symbols": len(target_shares),
+        }
+        context = build_evaluation_context(
+            target=target,
+            current_positions=current,
+            order_deltas=order_deltas,
+            engine_state=engine_state,
+            risk=risk,
+            mode=ai_mode,
+        )
+        evaluation = ai_evaluator.evaluate(context)
+        ai_scale = evaluation.scale if ai_mode == "scale" else 1.0
+        # evaluation.decision ("approve"/"reject") is intentionally not read
+        # here — it's advisory, logged below via _log_ai_evaluation, and has
+        # no effect on whether orders go out. Only ai_scale (when ai_mode ==
+        # "scale") ever changes what gets submitted.
+
+        if ai_mode == "scale" and ai_scale != 1.0:
+            target_shares = {k: round(v * ai_scale) for k, v in target_shares.items()}
+            all_syms = sorted(set(target_shares) | set(current))
+
     submitted: list[dict[str, Any]] = []
     ts = target.get("generated_at")
 
@@ -306,6 +400,9 @@ def execute_targets(
             "side": side,
             "live": live,
             "gross_scale": round(scale, 4),
+            "ai_scale": round(ai_scale, 4) if evaluation is not None else None,
+            "ai_mode": ai_mode if evaluation is not None else None,
+            "ai_evaluation": format_evaluation_for_logging(evaluation) if evaluation is not None else None,
             "zero_cross_deferred": zero_cross_deferred,
             "response": resp,
         }
@@ -313,7 +410,46 @@ def execute_targets(
         with open(orders_path, "a") as f:
             f.write(json.dumps(record, default=str) + "\n")
 
-    return {"submitted": submitted, "skipped": False, "gross_scale": scale, "equity": equity}
+    if evaluation is not None:
+        _log_ai_evaluation(
+            ai_evaluations_path, target, evaluation, ai_mode, ai_scale=round(ai_scale, 4), applied=True
+        )
+
+    return {
+        "submitted": submitted,
+        "skipped": False,
+        "gross_scale": scale,
+        "ai_scale": round(ai_scale, 4) if evaluation is not None else 1.0,
+        "ai_evaluation": format_evaluation_for_logging(evaluation) if evaluation is not None else None,
+        "equity": equity,
+        "cash": cash,
+        "anchor": anchor,
+        "anchor_basis": "cash" if use_cash_balance else "equity",
+    }
+
+
+def _log_ai_evaluation(
+    path: Path | str,
+    target: dict[str, Any],
+    evaluation: Any,
+    mode: str,
+    ai_scale: float,
+    applied: bool,
+) -> None:
+    """Append a structured AI evaluation record to disk."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "generated_at": target.get("generated_at"),
+        "target_date": target.get("date"),
+        "book": target.get("book", "champion"),
+        "mode": mode,
+        "ai_scale": ai_scale,
+        "applied": applied,
+        "evaluation": format_evaluation_for_logging(evaluation),
+    }
+    with open(path, "a") as f:
+        f.write(json.dumps(record, default=str) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -369,8 +505,61 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         default=False,
         dest="use_cash_balance",
-        help="Size the book against cash balance instead of equity, so positions are "
-        "fully paid and no Alpaca margin/borrowed buying power is used.",
+        help="Size the book's notional cap against cash balance instead of equity, so "
+        "the long leg is fully cash-paid and the book is smaller/more conservative. "
+        "Does not eliminate Reg-T margin usage on short legs, which are routine for "
+        "this long/short trend book.",
+    )
+    p.add_argument(
+        "--no-ai-evaluate",
+        action="store_true",
+        default=False,
+        dest="no_ai_evaluate",
+        help="Disable AI trade evaluation (enabled by default if an API key is available).",
+    )
+    p.add_argument(
+        "--ai-mode",
+        default="scale",
+        choices=["advisory", "scale"],
+        dest="ai_mode",
+        help="How the AI evaluation affects execution: advisory=log only, scale=multiply "
+        "target sizes. AI guidance never blocks or skips a rebalance outright — there "
+        "is no mode that does that. Default: scale.",
+    )
+    p.add_argument(
+        "--ai-provider",
+        default="kimi",
+        choices=["kimi", "openai", "openai-compatible"],
+        dest="ai_provider",
+        help="AI provider. 'kimi' uses https://api.moonshot.cn/v1; 'openai' uses OpenAI; "
+        "'openai-compatible' is a generic base_url endpoint. Default: kimi.",
+    )
+    p.add_argument(
+        "--ai-model",
+        default="moonshot-v1-8k",
+        dest="ai_model",
+        help="Model name for the AI provider. Default: moonshot-v1-8k.",
+    )
+    p.add_argument(
+        "--ai-api-key",
+        default=None,
+        dest="ai_api_key",
+        help="API key for the AI provider. If omitted, reads KIMI_API_KEY / OPENAI_API_KEY "
+        "from the environment or .env file.",
+    )
+    p.add_argument(
+        "--ai-api-base",
+        default=None,
+        dest="ai_api_base",
+        help="Override the provider base URL.",
+    )
+    p.add_argument(
+        "--ai-required",
+        action="store_true",
+        default=False,
+        dest="ai_required",
+        help="If the AI evaluation fails and this flag is set, abort execution. "
+        "Otherwise a failed call falls back to no-op (approve, scale=1.0).",
     )
     args = p.parse_args(argv)
 
@@ -387,6 +576,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Kill switch engaged ({kill.get('reason')}). Not submitting orders.")
         return 2
 
+    ai_evaluator = None
+    if not args.no_ai_evaluate:
+        ai_evaluator = make_evaluator(
+            use=True,
+            provider=args.ai_provider,
+            api_key=args.ai_api_key,
+            api_base=args.ai_api_base,
+            model=args.ai_model,
+            required=args.ai_required,
+        )
+
     try:
         res = execute_targets(
             target=target,
@@ -398,12 +598,22 @@ def main(argv: list[str] | None = None) -> int:
             equity_buffer=args.equity_buffer,
             equity_ref_halflife=args.equity_ref_halflife,
             use_cash_balance=args.use_cash_balance,
+            ai_evaluator=ai_evaluator,
+            ai_mode=args.ai_mode,
         )
     except Exception as exc:
         print(f"execute_alpaca failed: {exc}", file=sys.stderr)
         return 1
 
     if res.get("skipped"):
+        if res.get("reason") == "ai_rejected":
+            ai_eval = res.get("ai_evaluation") or {}
+            print(
+                f"No orders submitted: AI rejected the rebalance "
+                f"(confidence={ai_eval.get('confidence')}, "
+                f"reasoning={ai_eval.get('reasoning')!r})."
+            )
+            return 2
         print("No orders submitted: kill switch is engaged.")
         return 2
 
@@ -416,11 +626,19 @@ def main(argv: list[str] | None = None) -> int:
     skipped = [r for r in subs if _resp(r).get("skipped")]
     rejected = [r for r in subs if not _resp(r).get("id") and not _resp(r).get("skipped")]
     scale = res.get("gross_scale", 1.0)
-    equity = res.get("equity", 0.0)
+    ai_scale = res.get("ai_scale", 1.0)
+    anchor = res.get("anchor", res.get("equity", 0.0))
+    anchor_basis = res.get("anchor_basis", "equity")
     if scale < 1.0:
         print(
             f"Gross cap: book scaled to {scale:.1%} of target "
-            f"(≤{args.max_gross_mult:g}x equity ${equity:,.0f})."
+            f"(≤{args.max_gross_mult:g}x {anchor_basis} ${anchor:,.0f})."
+        )
+    if ai_scale != 1.0:
+        ai_eval = res.get("ai_evaluation") or {}
+        print(
+            f"AI scale: positions scaled to {ai_scale:.1%} "
+            f"(confidence={ai_eval.get('confidence')}, reasoning={ai_eval.get('reasoning')!r})."
         )
     print(
         f"{len(accepted)}/{len(subs)} orders ACCEPTED "
