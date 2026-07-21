@@ -111,13 +111,26 @@ noise). None of these require paid data.
    `experiments.jsonl` makes cherry-picking structurally impossible.
    *Cost: small. Value: protects every future decision made by reading the docs.*
 
-4. [ ] **PIT discipline for the COT panel (same bug class as prices).** CFTC data
-   is restated and the panel is refreshed in place — the exact silent-rewrite
-   failure the price cache just had. Stitch/append COT updates, log rejected
-   restatements, and let the input-revision check attribute forecast diffs to COT
-   vs prices. Also schedule the deliberate cache **rebase protocol** (e.g.
-   annually, logged) so the stitched basis drift stays bounded.
-   *Cost: medium — mirror `data._stitch_update` for the COT cache.*
+4. [x] **PIT discipline for the COT panel (same bug class as prices).** This is
+   what actually took the engine down on 2026-07-15: a same-day out-of-band
+   `generate_targets.py` run and the scheduled 17:30 cron each refreshed COT
+   live (default `refresh_cot=True`), got different CFTC values for the same
+   report dates in between, and the immutable feature-snapshot guard correctly
+   refused the second write — crashing `generate_targets` and, via `set -e`,
+   aborting the rest of `forward_loop.sh` (no shadow mark, no reconcile, no
+   Alpaca order for that day). Added `cot_data._stitch_cot_update` (mirrors
+   `data._stitch_update`, minus the ratio-rescale since the COT signal is
+   already a bounded ratio, not a price level): re-fetches keep cached report
+   dates verbatim, only append genuinely new ones, and reject-and-log any
+   fresh value that disagrees with an already-cached date to
+   `data/cot_revisions.jsonl`. `build_cot_signal_panel` also now falls back to
+   the full cache on a total fetch failure instead of silently returning
+   empty. `rebase=True` deliberately accepts fresh values for cached dates
+   (also logged) — no separate rebase *schedule* was added, matching prices
+   which also rely on manual `--rebase` rather than a cron. Attributing
+   reconcile.py's input-revision diffs to COT vs. price source was left out of
+   scope. Covered by `tests/test_cot.py::TestStitchCotUpdate` and
+   `::TestBuildCotSignalPanelPIT`.
 
 5. [x] **Fold-level error bars on every variant comparison.** Added
    `validation.paired_fold_comparison(baseline_folds, candidate_folds)`: matches

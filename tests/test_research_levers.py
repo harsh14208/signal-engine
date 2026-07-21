@@ -58,6 +58,17 @@ class TestPBO:
     def test_insufficient(self):
         assert probability_backtest_overfitting(pd.DataFrame(np.zeros((10, 1))))["insufficient"]
 
+    def test_pbo_exact_value_regression_pin(self):
+        # Pins the exact PBO for a fixed seed as a general regression guard.
+        # Note: PBO only depends on IS-argmax/OOS-rank ordering, and the internal
+        # Sharpe-row's ddof (0 vs 1) rescales every column's std by the same
+        # constant within a block, so it can't change that ordering — this value
+        # is (and should remain) invariant to that choice.
+        rng = np.random.default_rng(7)
+        m = rng.standard_normal((400, 6)) * 0.01
+        res = probability_backtest_overfitting(pd.DataFrame(m), n_splits=8)
+        assert res["pbo"] == pytest.approx(0.2, abs=1e-9)
+
 
 class TestTrialRegistry:
     def test_dedup_and_count(self, tmp_path):

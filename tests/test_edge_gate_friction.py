@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from signal_engine.config import Config
@@ -175,4 +176,47 @@ class TestCalibration:
         from signal_engine.backtest import _cost_per_symbol
 
         cfg = Config(cost_scheme="calibrated", calibration_path=str(cal_path))
-        assert _cost_per_symbol(["SPY"], cfg)["SPY"] == per_symbol["SPY"]
+        costs = _cost_per_symbol(["SPY", "TLT"], cfg)
+        assert costs["SPY"] == pytest.approx(per_symbol["SPY"])
+        assert costs["TLT"] == pytest.approx(loaded["default_bps"])  # fallback
+
+    def test_write_rejects_insufficient(self, tmp_path):
+        with pytest.raises(ValueError):
+            write_calibration({"insufficient": True}, tmp_path / "x.json")
+
+
+# ── Phase 0: edge gate ───────────────────────────────────────────────────────
+class TestEdgeGate:
+    def test_noise_fails(self):
+        from signal_engine.edge_gate import evaluate_edge
+
+        # Driftless synthetic panel has no edge → must FAIL the hard gates.
+        prices = synthetic_prices(symbols()[:8], n_days=900, seed=1)
+        rep = evaluate_edge(prices, Config(), n_trials=100)
+        assert rep["verdict"] == "FAIL"
+        assert not all(rep["hard_gates"].values())
+
+    def test_report_shape_and_formatting(self):
+        from signal_engine.edge_gate import evaluate_edge, format_verdict
+
+        prices = synthetic_prices(symbols()[:8], n_days=900, seed=1)
+        rep = evaluate_edge(prices, Config(), n_trials=100)
+        assert set(rep["hard_gates"]) == {"H1_clears_noise", "H2_edge_real", "H3_passes_deflated"}
+        assert set(rep["robustness_gates"]) == {
+            "R1_cpcv_robust",
+            "R2_walk_forward_ok",
+            "R3_cost_headroom",
+        }
+        assert rep["verdict"] in format_verdict(rep)
+
+    def test_forward_track_included_when_live_data(self):
+        from signal_engine.edge_gate import evaluate_edge
+
+        prices = synthetic_prices(symbols()[:8], n_days=900, seed=1)
+        live = pd.Series(
+            0.0005,
+            index=pd.date_range("2025-01-01", periods=40, freq="B"),
+        )
+        rep = evaluate_edge(prices, Config(), n_trials=100, live_returns=live)
+        assert rep["forward_track"] is not None
+        assert rep["forward_track"]["n_days"] == 40

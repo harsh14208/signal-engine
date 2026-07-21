@@ -84,3 +84,26 @@ def test_cross_sectional_momentum_ranking(small_prices):
         best = row.idxmax()
         worst = row.idxmin()
         assert mom.loc[idx, best] >= mom.loc[idx, worst]
+
+
+def test_custom_ewmac_speed_no_lookahead(small_prices):
+    """Custom EWMAC speeds not in the published table must use an expanding scalar."""
+    r = daily_returns(small_prices["SPY"])
+    v = blended_daily_vol(r)
+    base = ewmac_forecast(small_prices["SPY"], v, 10, 50)
+    tweaked = small_prices["SPY"].copy()
+    tweaked.iloc[-1] *= 1.5
+    rt = daily_returns(tweaked)
+    vt = blended_daily_vol(rt)
+    mod = ewmac_forecast(tweaked, vt, 10, 50)
+    # Earlier forecasts should be unchanged by a perturbation at the end.
+    assert np.allclose(base.iloc[:-1], mod.iloc[:-1], equal_nan=True)
+
+
+def test_custom_breakout_span_no_lookahead(small_prices):
+    """Custom breakout spans not in the published table must use an expanding scalar."""
+    base = breakout_forecast(small_prices["TLT"], 25)
+    tweaked = small_prices["TLT"].copy()
+    tweaked.iloc[-1] *= 1.5
+    mod = breakout_forecast(tweaked, 25)
+    assert np.allclose(base.iloc[:-1], mod.iloc[:-1], equal_nan=True)

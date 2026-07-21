@@ -48,7 +48,7 @@ def synthetic_prices(
     common = rng.normal(0, 0.005, size=n_days)  # market factor
     panel = {}
     for k, sym in enumerate(symbols):
-        beta = rng.uniform(0.15, 0.55)  # modest shared loading → corr ~0.1–0.2
+        beta = rng.uniform(0.15, 0.55)  # modest shared loading → corr ~0.01–0.02
         idio_vol = rng.uniform(0.010, 0.020)
         # Persistent drift via a slow mean-reverting OU process on the drift itself.
         # Weak enough that per-instrument trend Sharpe is a realistic ~0.2–0.4.
@@ -117,6 +117,66 @@ def _log_revision_event(event: dict) -> None:
         f.write(json.dumps(event) + "\n")
 
 
+def _pit_merge(
+    old: pd.DataFrame,
+    fresh: pd.DataFrame,
+    *,
+    tol: float,
+    diff_fn,
+    diff_key: str,
+    combine_new_rows,
+    keep_old_when_no_overlap: bool,
+) -> tuple[pd.DataFrame, dict]:
+    """Shared point-in-time merge skeleton: keep cached history VERBATIM, append
+    new dates, and report (without applying) any already-cached date whose
+    re-fetched value moved beyond `tol`. Used by both the price cache
+    (`_stitch_update`) and the COT cache (`cot_data._stitch_cot_update`), which
+    differ only in how they measure a revision and how they combine new rows
+    onto the cached basis.
+
+    `diff_fn(o_common, f_common)` returns the per-date discrepancy metric
+    checked against `tol`; `diff_key` names that metric in the report.
+    `combine_new_rows(o, f, anchor, new_rows)` returns the post-anchor rows to
+    append. `keep_old_when_no_overlap` controls behavior when the cached and
+    fresh series share no common date at all: prices discard the fresh fetch
+    entirely (no basis to ratio-stitch onto); COT still appends it after the
+    cached series' last date (its signal is already a bounded ratio, not a
+    price level, so there's nothing to rebase).
+    """
+    all_cols = list(dict.fromkeys(list(old.columns) + list(fresh.columns)))
+    out: dict[str, pd.Series] = {}
+    revised: dict[str, dict] = {}
+    for col in all_cols:
+        if col not in fresh.columns or fresh[col].dropna().empty:
+            out[col] = old[col]  # fresh fetch failed/missing → keep history
+            continue
+        if col not in old.columns or old[col].dropna().empty:
+            out[col] = fresh[col]  # brand-new instrument → take as-is
+            continue
+        o, f = old[col].dropna(), fresh[col].dropna()
+        common = o.index.intersection(f.index)
+        if len(common) == 0:
+            if keep_old_when_no_overlap:
+                out[col] = old[col]
+                continue
+            anchor = o.index.max()
+        else:
+            anchor = common.max()
+            diff = diff_fn(o.loc[common], f.loc[common])
+            bad = diff[diff > tol]
+            if not bad.empty:
+                revised[col] = {
+                    diff_key: float(bad.max()),
+                    "n_dates_revised": int(len(bad)),
+                    "first_revised": str(bad.index.min().date()),
+                }
+        new_rows = f.loc[f.index > anchor]
+        out[col] = combine_new_rows(o, f, anchor, new_rows)
+    panel = pd.DataFrame(out).sort_index()
+    report = {"revised": revised, "n_symbols_revised": len(revised)}
+    return panel, report
+
+
 def _stitch_update(old: pd.DataFrame, fresh: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Point-in-time cache update: keep cached history VERBATIM, append new dates.
 
@@ -137,35 +197,17 @@ def _stitch_update(old: pd.DataFrame, fresh: pd.DataFrame) -> tuple[pd.DataFrame
     Returns (stitched_panel, revision_report). The report lists symbols whose
     overlap moved beyond REVISION_TOL — the revisions being *rejected*.
     """
-    all_cols = list(dict.fromkeys(list(old.columns) + list(fresh.columns)))
-    out: dict[str, pd.Series] = {}
-    revised: dict[str, dict] = {}
-    for col in all_cols:
-        if col not in fresh.columns or fresh[col].dropna().empty:
-            out[col] = old[col]  # fresh fetch failed/missing → keep history
-            continue
-        if col not in old.columns or old[col].dropna().empty:
-            out[col] = fresh[col]  # brand-new instrument → take as-is
-            continue
-        o, f = old[col].dropna(), fresh[col].dropna()
-        common = o.index.intersection(f.index)
-        if len(common) == 0:
-            out[col] = old[col]
-            continue
-        anchor = common.max()
-        rel = (f.loc[common] / o.loc[common] - 1.0).abs()
-        if float(rel.max()) > REVISION_TOL:
-            revised[col] = {
-                "max_rel_diff": float(rel.max()),
-                "n_dates_revised": int((rel > REVISION_TOL).sum()),
-                "first_revised": str(rel[rel > REVISION_TOL].index.min().date()),
-            }
-        new_rows = f.loc[f.index > anchor]
-        stitched = new_rows * (o.loc[anchor] / f.loc[anchor])
-        out[col] = pd.concat([o, stitched])
-    panel = pd.DataFrame(out).sort_index()
-    report = {"revised": revised, "n_symbols_revised": len(revised)}
-    return panel, report
+    return _pit_merge(
+        old,
+        fresh,
+        tol=REVISION_TOL,
+        diff_fn=lambda o_c, f_c: (f_c / o_c - 1.0).abs(),
+        diff_key="max_rel_diff",
+        combine_new_rows=lambda o, f, anchor, new_rows: pd.concat(
+            [o, new_rows * (o.loc[anchor] / f.loc[anchor])]
+        ),
+        keep_old_when_no_overlap=True,
+    )
 
 
 def load_prices(

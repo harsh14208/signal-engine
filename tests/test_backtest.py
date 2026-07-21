@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from signal_engine.backtest import BacktestResult, run_backtest
+from signal_engine.backtest import BacktestResult, _rule_weights, run_backtest
 from signal_engine.config import Config
 
 
@@ -156,3 +156,27 @@ def test_default_run_uses_expanding_calibration(full_prices):
     assert res.idm >= 1.0
     assert res.fdm >= 1.0
     assert abs(sum(res.weights.values()) - 1.0) < 1e-6
+
+
+class TestRuleWeights:
+    def test_no_config_weights_is_equal(self):
+        w = _rule_weights(["a", "b", "c"], Config())
+        assert w == pytest.approx({"a": 1 / 3, "b": 1 / 3, "c": 1 / 3})
+
+    def test_full_match_is_renormalised(self):
+        cfg = Config(rule_weights={"a": 1.0, "b": 3.0})
+        w = _rule_weights(["a", "b"], cfg)
+        assert w == pytest.approx({"a": 0.25, "b": 0.75})
+
+    def test_partial_weights_fill_missing_keys_equally_then_renormalise(self):
+        # Only "a" specified; "b" gets the equal-weight default (1/2) before renorm.
+        cfg = Config(rule_weights={"a": 1.0})
+        w = _rule_weights(["a", "b"], cfg)
+        assert w == pytest.approx({"a": 1.0 / 1.5, "b": 0.5 / 1.5})
+
+    def test_explicit_all_zero_weights_fall_back_to_equal_not_crash(self):
+        # Every active key explicitly zeroed sums to 0 — can't renormalise to 1,
+        # so this falls back to equal weights rather than dividing by zero.
+        cfg = Config(rule_weights={"a": 0.0, "b": 0.0})
+        w = _rule_weights(["a", "b"], cfg)
+        assert w == pytest.approx({"a": 0.5, "b": 0.5})

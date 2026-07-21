@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from signal_engine.macro import (
+    _equity_drawdown,
     credit_overlay,
     hmm_regime_overlay,
     regime_overlay,
@@ -129,3 +130,24 @@ def test_hmm_regime_overlay_runs_and_no_lookahead():
         prices, tweaked_vix, spy, tnx=tnx, irx=irx, train_window=200, refit_stride=21
     )
     assert np.allclose(base.iloc[:-1].to_numpy(), mod.iloc[:-1].to_numpy())
+
+
+def test_equity_drawdown_ignores_non_equity_first_column():
+    """The drawdown component must target equity symbols, not the first column."""
+    idx = pd.bdate_range("2015-01-01", periods=100)
+    # First column is a bond in a deep drawdown; equities are flat.
+    prices = pd.DataFrame(
+        {
+            "TLT": np.concatenate([np.linspace(100, 70, 60), np.linspace(70, 60, 40)]),
+            "SPY": np.full(100, 100.0),
+            "IWM": np.full(100, 100.0),
+        },
+        index=idx,
+    )
+    dd = _equity_drawdown(prices)
+    # Equity index is flat, so drawdown should be near zero (not the bond's drawdown).
+    assert dd.abs().max() < 0.01
+    # Verify it actually used the equity columns by checking the mean.
+    eq_mean = prices[["SPY", "IWM"]].mean(axis=1)
+    expected = (eq_mean / eq_mean.cummax() - 1.0).fillna(0.0)
+    assert np.allclose(dd.to_numpy(), expected.to_numpy())

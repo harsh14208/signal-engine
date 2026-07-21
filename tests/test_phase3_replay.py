@@ -51,10 +51,23 @@ class TestReplayDecision:
         bad = copy.deepcopy(snapshot)
         k = next(iter(bad["features"]["units"]))
         bad["features"]["units"][k] = (bad["features"]["units"][k] or 0.0) + 25.0
-        bad["features"]["price_fingerprint"] = "deadbeefdeadbeef"
+        bad["features"]["price_fingerprint"] = "v2:deadbeefdeadbeef"
         r = replay_decision(bad, prices=prices, cot=None)
         assert r["kind"] == "data"
         assert r["alarm"] is False
+
+    def test_legacy_unversioned_fingerprint_is_not_masked_as_data_drift(self, snapshot, prices):
+        """A stored fingerprint from before FINGERPRINT_VERSION existed (old
+        last-row-only algorithm) can't be equality-compared against a fresh
+        full-panel hash — it should never silently mask a real output mismatch
+        as benign 'data' drift."""
+        bad = copy.deepcopy(snapshot)
+        k = next(iter(bad["features"]["units"]))
+        bad["features"]["units"][k] = (bad["features"]["units"][k] or 0.0) + 25.0
+        bad["features"]["price_fingerprint"] = "deadbeefdeadbeef"
+        r = replay_decision(bad, prices=prices, cot=None)
+        assert r["kind"] == "logic"
+        assert r["alarm"] is True
 
     def test_lineage_change_is_not_alarm(self, snapshot, prices):
         bad = copy.deepcopy(snapshot)

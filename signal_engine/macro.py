@@ -9,6 +9,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+from .markets import asset_classes
+
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 
@@ -113,7 +115,7 @@ def load_credit_spread(start: str | None = None, end: str | None = None) -> pd.S
     end_dt = pd.Timestamp(end or datetime.now().strftime("%Y-%m-%d"))
     idx = pd.bdate_range(start=start_dt, end=end_dt)
     out = s.reindex(idx, method="ffill").ffill()
-    return out.fillna(s.mean())
+    return out
 
 
 def _load_yf_series(symbol: str, start: str, end: str) -> pd.Series:
@@ -143,7 +145,8 @@ def _load_yf_series(symbol: str, start: str, end: str) -> pd.Series:
 
 def _equity_drawdown(prices: pd.DataFrame) -> pd.Series:
     """Drawdown of an equal-weighted equity index from the price panel."""
-    equity_cols = [c for c in prices.columns if "equity" in c.lower()]
+    equity_symbols = set(asset_classes(expanded=True).get("equity", []))
+    equity_cols = [c for c in prices.columns if c in equity_symbols]
     if not equity_cols:
         # Fall back to the first column if no column is obviously equity.
         equity_cols = [prices.columns[0]]

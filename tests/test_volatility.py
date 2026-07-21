@@ -54,4 +54,6 @@ def test_garch_no_lookahead(small_prices):
     tweaked = r.copy()
     tweaked.iloc[-1] = tweaked.iloc[-1] + 0.5
     mod = blended_daily_vol(tweaked, use_garch=True, garch_weight=1.0)
-    assert np.allclose(base.iloc[:-1].to_numpy(), mod.iloc[:-1].to_numpy())
+    assert np.allclose(
+        base.iloc[:-1].to_numpy(), mod.iloc[:-1].to_numpy(), equal_nan=True
+    )

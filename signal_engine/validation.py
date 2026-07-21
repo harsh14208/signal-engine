@@ -352,7 +352,9 @@ def probability_backtest_overfitting(returns: pd.DataFrame, n_splits: int = 10) 
 
     def _sharpe_row(m: pd.DataFrame) -> np.ndarray:
         mu = m.mean().to_numpy()
-        sd = m.std(ddof=0).to_numpy()
+        # ddof=1 (sample std) matches metrics.sharpe()'s convention (pandas' own
+        # .std() default) elsewhere in the codebase.
+        sd = m.std(ddof=1).to_numpy()
         with np.errstate(divide="ignore", invalid="ignore"):
             return np.where(sd > 0, mu / sd, 0.0)
 

@@ -146,6 +146,9 @@ def main() -> None:
             f"{r['wf_gap']:>8.3f} {r['max_dd']:>9.1%} {r['turnover']:>8.1f}x {r['mean_gross']:>8.2f}x"
         )
 
+    def _wf_report(row: dict) -> dict:
+        return {"raw": {"walk_forward": {"folds": row["wf_folds"]}}}
+
     print("\nPaired fold comparison vs baseline (bootstrap 95% CI on OOS Sharpe delta):")
     print("-" * 110)
     for r in rows[1:]:
@@ -155,7 +158,7 @@ def main() -> None:
             continue
         ci = f"[{comp['ci_low']:+.3f}, {comp['ci_high']:+.3f}]"
         tag = "indistinguishable" if comp["indistinguishable"] else "significant"
-        promo = promotion_decision(baseline, r)
+        promo = promotion_decision(_wf_report(baseline), _wf_report(r))
         print(
             f"{r['label']:<36} delta={comp['mean_delta']:+.3f} {ci:<18} {tag:<17} "
             f"promotion={promo['verdict']}"

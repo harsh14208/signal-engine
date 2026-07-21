@@ -95,11 +95,14 @@ def blended_daily_vol(
     garch_min_history: int = VOL_GARCH_MIN_HISTORY,
     garch_refit_step: int = VOL_GARCH_REFIT_STEP,
 ) -> pd.Series:
-    """30% expanding long-run mean of EW vol + 70% recent EW vol, with optional GARCH blend."""
+    """30% expanding long-run mean of EW vol + 70% recent EW vol, with optional GARCH blend.
+
+    Warm-up observations where vol is not yet estimable are left as NaN rather
+    than backfilled, avoiding a look-ahead leak.
+    """
     recent = ew_daily_vol(returns, span)
     long_run = recent.expanding(min_periods=VOL_MIN_PERIODS).mean()
     ew_blend = long_weight * long_run + (1.0 - long_weight) * recent
-    ew_blend = ew_blend.bfill()
 
     if not use_garch or garch_weight <= 0:
         return ew_blend
@@ -113,7 +116,7 @@ def blended_daily_vol(
 
     combined = garch_weight * garch + (1.0 - garch_weight) * ew_blend
     combined = combined.where(garch.notna(), ew_blend)
-    return combined.bfill()
+    return combined
 
 
 def annualise(daily_vol: pd.Series | pd.DataFrame) -> pd.Series | pd.DataFrame:

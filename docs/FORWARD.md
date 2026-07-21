@@ -81,6 +81,62 @@ safer wrapper that handles old macOS `load/unload` as well as modern
 | `data/reconciliation/YYYY-MM-DD.json` | Daily correlation, tracking error, drift, edge-decay alarm. |
 | `data/kill_switch.json` | Set to `{"paused": true, ...}` if a guardrail fires. |
 | `data/broker_orders.jsonl` | Submitted Alpaca orders (once enabled). |
+| `data/ai_evaluations.jsonl` | AI evaluation records (once enabled). |
+
+## AI trade evaluation (on by default)
+
+`scripts/execute_alpaca.py` calls an LLM to evaluate the proposed portfolio
+before any orders are submitted. This is an **opt-out execution overlay**, not a
+replacement for the validated signal engine. It is designed to:
+
+- catch portfolio-level risk the deterministic overlays might miss,
+- scale down the book when recent edge decay or macro context is hostile, and
+- leave a logged reasoning trail for post-hoc review.
+
+To disable it, pass `--no-ai-evaluate`.
+
+### Provider
+
+The default provider is **Kimi (Moonshot AI)** using its OpenAI-compatible
+endpoint. Set the key in `.env`:
+
+```bash
+kimi_api_key=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+kimi_api_base=https://api.moonshot.cn/v1
+```
+
+If no key is configured the evaluator falls back to no-op (approve, scale=1.0).
+Generic OpenAI-compatible endpoints are also supported via `--ai-provider openai`
+or `--ai-provider openai-compatible`.
+
+### Modes
+
+- `--ai-mode advisory` — log AI confidence and reasoning, but do not change
+  execution. Safest for observing the model.
+- `--ai-mode scale` (default) — multiply the whole target book by the AI's
+  `scale` factor (0-1) before order sizing.
+- `--ai-mode block` — skip the rebalance entirely if the AI returns
+  `decision: reject`. A failed API call falls back to no-op unless `--ai-required`
+  is set.
+
+### Cost and latency
+
+The evaluator makes one API call per rebalance (daily). Expect ~1-5 seconds and a
+small per-call cost. The call is synchronous; the daily loop is not latency
+sensitive, so this is acceptable.
+
+### Example
+
+```bash
+# Default: Kimi evaluation in scale mode.
+python scripts/execute_alpaca.py --paper
+
+# Disable the AI evaluator.
+python scripts/execute_alpaca.py --paper --no-ai-evaluate
+```
+
+Records are written to `data/ai_evaluations.jsonl` and embedded in each
+`broker_orders.jsonl` row under `ai_evaluation`.
 
 ## Reading the reconciliation report
 

@@ -219,6 +219,20 @@ class Config:
     # free FX carry signal.
     use_fx_carry: bool = False
 
+    # AI-driven trade evaluation (on by default). Runs after the target is computed
+    # but before broker orders are submitted. Requires a Kimi / OpenAI-compatible API
+    # key; if no key is available it falls back to no-op (approve, scale=1.0).
+    use_ai_evaluator: bool = True
+    ai_evaluator_mode: str = "scale"  # advisory | scale | block
+    ai_provider: str = "kimi"
+    ai_model: str = "moonshot-v1-8k"
+    ai_api_key: str | None = None
+    ai_api_base: str | None = "https://api.moonshot.cn/v1"
+    ai_timeout: float = 30.0
+    ai_max_tokens: int = 512
+    ai_temperature: float = 0.2
+    ai_required: bool = False  # if True, API failure raises; if False, no-op fallback
+
     def __post_init__(self):
         # Backward compatibility: the old boolean flag overrides the scheme.
         if self.cluster_weights and self.weight_scheme == "equal":
@@ -278,6 +292,8 @@ class Config:
             parts.append(f"max_gross={self.max_gross_notional:.1f}x")
         if self.financing_rate != 0.0:
             parts.append(f"fin={self.financing_rate:.2%}")
+        if self.use_ai_evaluator:
+            parts.append(f"ai_eval={self.ai_evaluator_mode}")
         return " ".join(parts)
 
     def min_history_required(self) -> int:

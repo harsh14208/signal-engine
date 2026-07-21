@@ -39,17 +39,43 @@ def snapshot_hash(features: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
-def price_fingerprint(prices) -> str | None:
-    """Stable hash of the latest price row — the data identity for an as-of date.
+FINGERPRINT_VERSION = "v2"
 
-    A change here between snapshot time and replay time means the underlying data
-    for that date was revised (vendor re-adjustment/backfill), i.e. *data drift*.
+
+def price_fingerprint(prices) -> str | None:
+    """Stable hash of the full price panel — the data identity for an as-of date.
+
+    A change here between snapshot time and replay time means some date's history
+    was revised upstream (vendor re-adjustment/backfill), i.e. *data drift*, not
+    code drift. Hashing only the latest row (the original implementation) misses
+    revisions to earlier bars that the expanding-window calibration is still
+    sensitive to — exactly the 2026-07-10 TIP/IEF/HYG/LQD dividend-back-adjustment
+    whipsaw documented in data.py's point-in-time cache: the as-of row was
+    unchanged, only history behind it moved, so the old fingerprint matched and
+    the resulting divergence was misclassified as logic drift.
+
+    The result is prefixed with FINGERPRINT_VERSION so replay.py can tell a
+    fingerprint produced by this (full-panel) algorithm apart from one produced
+    by the old (last-row-only) algorithm — see fingerprint_comparable().
     """
     if prices is None or len(prices) == 0:
         return None
-    tail = prices.tail(1)
-    row = {c: float(tail[c].iloc[-1]) for c in tail.columns if tail[c].notna().iloc[-1]}
-    return hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()[:16]
+    rounded = prices.round(6)
+    payload = rounded.to_csv()
+    digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
+    return f"{FINGERPRINT_VERSION}:{digest}"
+
+
+def fingerprint_comparable(stored_fp: str | None) -> bool:
+    """Whether a stored fingerprint was produced by the current price_fingerprint
+    algorithm (and so can be equality-compared against a freshly computed one).
+
+    Snapshots saved before FINGERPRINT_VERSION was introduced hold an unversioned
+    hash from the old (last-row-only) algorithm; comparing those against a new
+    full-panel hash would always mismatch regardless of whether the data actually
+    changed, which would misclassify real logic drift as benign data drift.
+    """
+    return stored_fp is not None and stored_fp.startswith(f"{FINGERPRINT_VERSION}:")
 
 
 def save_snapshot(

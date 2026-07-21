@@ -23,17 +23,26 @@ import json
 import os
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 import pandas as pd
 
 from .config import FORECAST_CAP
+from .data import _pit_merge
 
 _DATASET = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+COT_REVISIONS_LOG = os.path.join(_CACHE_DIR, "cot_revisions.jsonl")
 
 COT_SCALAR = 10.0  # z-score (std≈1) → mean |forecast| ≈ 10
 COT_Z_WINDOW = 756  # ~3-year rolling z (the classic "COT index" horizon)
 COT_REPORT_LAG = 5  # trading-day lag — COT is released ~3 days after the as-of date
+
+# Absolute tolerance on the (long-short)/OI ratio above which a re-fetched report
+# date counts as RESTATED. The ratio is recomputed from the same underlying
+# integer fields, so an unrevised re-fetch reproduces it to float precision;
+# this only needs to clear that noise floor.
+COT_REVISION_TOL = 1e-9
 
 # ETF → (include name-patterns [any], exclude name-patterns [none]). Covers the
 # macro core; ETFs with no clean single futures contract are omitted.
@@ -97,14 +106,55 @@ def _fetch_market(include: list[str], exclude: list[str]) -> pd.Series | None:
     return pd.Series({pd.Timestamp(d): v[1] for d, v in best.items()}).sort_index()
 
 
+def _log_cot_revision_event(event: dict) -> None:
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    event = {"at": datetime.now(timezone.utc).isoformat(), **event}
+    with open(COT_REVISIONS_LOG, "a") as f:
+        f.write(json.dumps(event) + "\n")
+
+
+def _stitch_cot_update(old: pd.DataFrame, fresh: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Point-in-time COT cache update: keep cached report dates VERBATIM, append new ones.
+
+    CFTC restates prior weeks' data in place on occasion (late filings, corrections),
+    so a naive full-overwrite refresh silently rewrites the forecast the engine
+    already traded on — the same bug class the price cache had before its PIT fix
+    (the 2026-07-10 TIP/IEF whipsaw; see docs/FORWARD.md). Unlike prices, the COT
+    signal is already a bounded ratio (net position / open interest), not a price
+    level, so there is no basis to ratio-stitch onto: new report dates are appended
+    as fetched, and a fresh value that disagrees with an already-cached date is
+    REJECTED and reported, not applied.
+
+    Returns (stitched_panel, revision_report). The report lists symbols whose
+    already-cached dates moved beyond `COT_REVISION_TOL` on re-fetch — the
+    restatements being *rejected*.
+    """
+    return _pit_merge(
+        old,
+        fresh,
+        tol=COT_REVISION_TOL,
+        diff_fn=lambda o_c, f_c: (f_c - o_c).abs(),
+        diff_key="max_abs_diff",
+        combine_new_rows=lambda o, f, anchor, new_rows: pd.concat([o, new_rows]),
+        keep_old_when_no_overlap=False,
+    )
+
+
 def build_cot_signal_panel(
     prices: pd.DataFrame,
     expanded: bool = False,
     use_cache: bool = True,
     tag: str | None = None,
     refresh: bool = False,
+    rebase: bool = False,
 ) -> pd.DataFrame:
-    """Daily (weekly-ffilled) net-positioning signal per mappable instrument."""
+    """Daily (weekly-ffilled) net-positioning signal per mappable instrument.
+
+    The cache is POINT-IN-TIME: a refresh never rewrites report dates already
+    cached (see `_stitch_cot_update`); rejected upstream restatements are logged
+    to `data/cot_revisions.jsonl`. Pass `rebase=True` to deliberately accept the
+    fresh values for already-cached dates wholesale (also logged).
+    """
     tag = tag or ("expanded" if expanded else "core")
     cache = os.path.join(_CACHE_DIR, f"cot_signal_{tag}.parquet")
     syms = [s for s in prices.columns if s in COT_MAP]
@@ -117,7 +167,7 @@ def build_cot_signal_panel(
         if set(syms).issubset(set(cached.columns)):
             return cached.reindex(prices.index).ffill()[syms]
 
-    out: dict[str, pd.Series] = {}
+    fresh_out: dict[str, pd.Series] = {}
     for sym in syms:
         inc, exc = COT_MAP[sym]
         try:
@@ -125,13 +175,34 @@ def build_cot_signal_panel(
         except Exception:
             continue
         if s is not None and not s.empty:
-            out[sym] = s
-    if not out:
+            fresh_out[sym] = s
+    fresh = pd.DataFrame(fresh_out).sort_index() if fresh_out else pd.DataFrame()
+
+    if os.path.exists(cache):
+        old = pd.read_parquet(cache)
+        old.index = pd.to_datetime(old.index)
+        if rebase:
+            panel = fresh if not fresh.empty else old
+            _log_cot_revision_event({"tag": tag, "action": "rebase"})
+        else:
+            panel, report = _stitch_cot_update(old, fresh)
+            if report["n_symbols_revised"]:
+                _log_cot_revision_event({"tag": tag, "action": "stitched", **report})
+                syms_r = ", ".join(sorted(report["revised"]))
+                print(
+                    f"⚠ upstream COT restatement REJECTED (PIT cache kept) for "
+                    f"{report['n_symbols_revised']} symbol(s): {syms_r} "
+                    f"→ logged to {os.path.basename(COT_REVISIONS_LOG)}"
+                )
+    else:
+        panel = fresh
+
+    if panel.empty:
         return pd.DataFrame(index=prices.index)
-    panel = pd.DataFrame(out).sort_index()
     os.makedirs(_CACHE_DIR, exist_ok=True)
     panel.to_parquet(cache)
-    return panel.reindex(prices.index).ffill()[list(out.columns)]
+    out_syms = [s for s in syms if s in panel.columns]
+    return panel.reindex(prices.index).ffill()[out_syms]
 
 
 def cot_forecast(

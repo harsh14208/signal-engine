@@ -33,6 +33,8 @@ python scripts/detect_drift.py --source auto --enforce || true
 
 # 6. Submit orders to Alpaca PAPER to match the target (reads ALPACA_SE_* creds;
 #    respects the kill switch). Enabled 2026-06-29 for forward-test execution.
-#    --max-gross-mult 1.0 + --use-cash-balance sizes the book against cash only,
-#    so the paper account does not use Alpaca margin or borrowed buying power.
+#    --max-gross-mult 1.0 + --use-cash-balance sizes the book's notional cap
+#    against cash instead of equity (long leg fully cash-paid, smaller/more
+#    conservative book). Short legs, routine for this long/short trend book,
+#    still draw Reg-T margin buying power regardless of this flag.
 python scripts/execute_alpaca.py --paper --max-gross-mult 1.0 --use-cash-balance

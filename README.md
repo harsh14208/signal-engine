@@ -109,7 +109,7 @@ run:
 
 ```
 Mean standalone instrument Sharpe : 0.12   (no single bet is impressive)
-Mean pairwise correlation          : ~0.00
+Mean pairwise correlation          : ~0.00–0.02  (low; idiosyncratic noise dominates)
 Portfolio Sharpe                   : 0.57
 Diversification ratio              : 4.7×   ← the whole thesis
 Deflated Sharpe (100 trials)       : 0.57 < 0.77  ⚠ FAILS  (the tooling has teeth)

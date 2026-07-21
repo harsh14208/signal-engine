@@ -37,6 +37,8 @@ CORE = symbols(expanded=False)
 END = "2026-07-15"
 CACHE_TAG = "universe"
 N_SPLITS = 4
+CAP = 3.0
+FIN_RATE = 0.01
 
 
 def _run(label: str, cfg: Config) -> dict:
@@ -53,6 +55,7 @@ def _run(label: str, cfg: Config) -> dict:
         "ann_vol": s["ann_vol"],
         "max_dd": s["max_drawdown"],
         "turnover": s["ann_turnover"],
+        "mean_gross": float(result.gross_exposure.mean()),
         "wf_mean_is": wf.get("mean_is_sharpe"),
         "wf_mean_oos": wf.get("mean_oos_sharpe"),
         "wf_gap": wf.get("mean_gap"),
@@ -61,13 +64,20 @@ def _run(label: str, cfg: Config) -> dict:
 
 
 def main() -> None:
+    # Matches the 3x cap + 1% financing convention used by eval_breadth_levers.py /
+    # eval_optimizations.py, so candidates can't win by taking on free (uncosted,
+    # uncapped) leverage relative to baseline.
+    cost = dict(max_gross_notional=CAP, financing_rate=FIN_RATE)
     configs = [
-        ("baseline", Config()),
-        ("+accel", Config(use_accel=True)),
-        ("+xsmom", Config(use_xsmom=True)),
-        ("+accel +xsmom", Config(use_accel=True, use_xsmom=True)),
-        ("longer breakout (80,160,320)", Config(breakout_spans=(80, 160, 320))),
-        ("+all three", Config(use_accel=True, use_xsmom=True, breakout_spans=(80, 160, 320))),
+        ("baseline", Config(**cost)),
+        ("+accel", Config(use_accel=True, **cost)),
+        ("+xsmom", Config(use_xsmom=True, **cost)),
+        ("+accel +xsmom", Config(use_accel=True, use_xsmom=True, **cost)),
+        ("longer breakout (80,160,320)", Config(breakout_spans=(80, 160, 320), **cost)),
+        (
+            "+all three",
+            Config(use_accel=True, use_xsmom=True, breakout_spans=(80, 160, 320), **cost),
+        ),
     ]
 
     rows = []
@@ -76,13 +86,16 @@ def main() -> None:
         rows.append(_run(label, cfg))
 
     baseline = rows[0]
-    print("\n" + "=" * 95)
-    print(f"{'Configuration':<32} {'Net SR':>8} {'WF OOS':>8} {'Gap':>8} {'Max DD':>9} {'Turn':>8}")
-    print("-" * 95)
+    print("\n" + "=" * 105)
+    print(
+        f"{'Configuration':<32} {'Net SR':>8} {'WF OOS':>8} {'Gap':>8} "
+        f"{'Max DD':>9} {'Turn':>8} {'Gross':>8}"
+    )
+    print("-" * 105)
     for r in rows:
         print(
             f"{r['label']:<32} {r['net_sharpe']:>8.3f} {r['wf_mean_oos']:>8.3f} "
-            f"{r['wf_gap']:>8.3f} {r['max_dd']:>9.1%} {r['turnover']:>8.1f}x"
+            f"{r['wf_gap']:>8.3f} {r['max_dd']:>9.1%} {r['turnover']:>8.1f}x {r['mean_gross']:>8.2f}x"
         )
 
     print("\nPaired fold comparison vs baseline (bootstrap 95% CI on OOS Sharpe delta):")

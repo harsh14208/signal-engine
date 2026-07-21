@@ -7,6 +7,7 @@ shadow paper loop (Tier A). It keeps the live scripts thin and testable.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,46 @@ def _slice_prices(
 DEFAULT_RETURNS_PATH = _DATA_DIR / "live_returns.csv"
 DEFAULT_RECON_DIR = _DATA_DIR / "reconciliation"
 DEFAULT_KILL_SWITCH_PATH = _DATA_DIR / "kill_switch.json"
+
+
+def _to_json_serializable(obj: Any) -> Any:
+    """Convert Config dataclass contents to JSON-safe types."""
+    if isinstance(obj, tuple):
+        return [_to_json_serializable(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _to_json_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_json_serializable(v) for v in obj]
+    if isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    return obj
+
+
+def _serialize_config(config: Config) -> dict[str, Any]:
+    """Return a JSON-safe dict representation of a Config."""
+    return _to_json_serializable(asdict(config))
+
+
+def _tupleize(value: Any) -> Any:
+    """Recursively convert lists to tuples for Config tuple fields."""
+    if isinstance(value, list):
+        return tuple(_tupleize(v) for v in value)
+    return value
+
+
+def _restore_tuples(config_dict: dict[str, Any]) -> dict[str, Any]:
+    """Convert serialized lists back to tuples where Config fields are tuples."""
+    tuple_fields = {
+        f.name for f in fields(Config) if isinstance(getattr(Config(), f.name), tuple)
+    }
+    out = {}
+    for k, v in config_dict.items():
+        if k in tuple_fields and isinstance(v, list):
+            v = _tupleize(v)
+        out[k] = v
+    return out
 
 
 def _build_cot_forecast_panel_with_fallback(
@@ -86,7 +127,16 @@ def validated_config(cot: bool = True, **overrides: Any) -> Config:
 
 
 def config_from_target(target: dict[str, Any]) -> Config:
-    """Rebuild the Config used to generate a target record."""
+    """Rebuild the Config used to generate a target record.
+
+    Newer records store the full config under the ``config`` key; older records
+    store only a subset of scalar fields and fall back to validated defaults.
+    """
+    target = target or {}
+    if "config" in target and isinstance(target["config"], dict):
+        cfg_dict = _restore_tuples(target["config"])
+        return Config(**cfg_dict)
+    # Legacy target record: reconstruct from the limited scalar fields.
     return validated_config(
         capital=target.get("capital", 1_000_000.0),
         vol_target=target.get("vol_target", 0.20),
@@ -177,6 +227,8 @@ def build_target_record(
         "date": target_date,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "book": book,
+        # Legacy scalar fields kept for backward compatibility; the full config is
+        # stored under "config" for accurate reconstruction.
         "capital": float(cfg.capital),
         "vol_target": float(cfg.vol_target),
         "buffer_fraction": float(cfg.buffer_fraction),
@@ -186,6 +238,7 @@ def build_target_record(
         "financing_rate": float(cfg.financing_rate),
         "financing_threshold": float(cfg.financing_threshold),
         "max_annual_financing_cost": cfg.max_annual_financing_cost,
+        "config": _serialize_config(cfg),
         "cot_as_of": latest_cot_as_of(cot),
         # Instruments added beyond the core universe (e.g. the semis pack) — needed
         # to rebuild the exact same price panel for reconciliation and replay.

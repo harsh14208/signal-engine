@@ -448,7 +448,10 @@ def run(args) -> int:
         if cfg.use_cot
         else None
     )
-    result = run_backtest(prices, cfg, carry=carry, regime=regime, cot=cot)
+    # Localised suppression: the backtest legitimately divides by zero/NaN during
+    # warm-up (vol not yet available). Suppress only here, not process-wide.
+    with np.errstate(all="ignore"):
+        result = run_backtest(prices, cfg, carry=carry, regime=regime, cot=cot)
     print(f"# signal-engine — {args.source} run\n")
     print(full_report(result))
     if args.oos:
@@ -485,9 +488,9 @@ def main(argv=None) -> int:
     p.add_argument(
         "--cost-scheme",
         default="flat",
-        choices=["flat", "instrument"],
+        choices=["flat", "instrument", "calibrated"],
         dest="cost_scheme",
-        help="flat 1.5 bps or per-instrument spreads",
+        help="flat bps, per-instrument spreads, or calibrated per-side costs",
     )
     p.add_argument("--buffer", type=float, default=0.30)
     p.add_argument(
@@ -908,7 +911,6 @@ def main(argv=None) -> int:
         args.regime_overlay = True
         args.buffer = 0.30
         args.regime_smooth = 5
-    np.seterr(all="ignore")
     return run(args)
 
 

@@ -38,6 +38,18 @@ def ewma(prices: pd.Series, span: int) -> pd.Series:
     return prices.ewm(span=span, min_periods=2).mean()
 
 
+def _expanding_scalar_series(
+    raw: pd.Series, target: float = AVG_ABS_FORECAST, min_periods: int = 20
+) -> pd.Series:
+    """Expanding-window scalar with no lookahead.
+
+    `target / expanding_mean(|raw|)`, shifted one day so today's forecast only
+    uses information available up to yesterday.
+    """
+    mean_abs = raw.abs().expanding(min_periods=min_periods).mean().replace(0.0, np.nan)
+    return (target / mean_abs).shift(1).fillna(1.0)
+
+
 def ewmac_forecast(
     prices: pd.Series,
     daily_return_vol: pd.Series,
@@ -48,15 +60,16 @@ def ewmac_forecast(
 ) -> pd.Series:
     """Crossover normalised by price volatility, scaled to mean |f| ≈ 10.
 
-    Uses the published constant scalar by default (an empirical per-series scalar
-    would peek at the whole sample = lookahead).
+    Uses the published constant scalar by default. If a custom speed is not in
+    the published table, the scalar is estimated from an expanding window (no
+    lookahead) rather than the full sample.
     """
     price_vol = (daily_return_vol * prices).replace(0.0, np.nan)
     raw = (ewma(prices, fast) - ewma(prices, slow)) / price_vol
     if scalar is None:
         scalar = EWMAC_SCALARS.get((fast, slow))
-        if scalar is None:  # speed not in the published table → empirical fallback
-            scalar = AVG_ABS_FORECAST / raw.abs().mean()
+        if scalar is None:  # speed not in the published table → expanding-window fallback
+            return _cap(raw * _expanding_scalar_series(raw), cap)
     return _cap(raw * scalar, cap)
 
 
@@ -64,7 +77,11 @@ def breakout_forecast(
     prices: pd.Series, span: int, scalar: float | None = None, cap: float = FORECAST_CAP
 ) -> pd.Series:
     """Smoothed position within the rolling [min, max] channel, in [-1, 1]-ish,
-    scaled to forecast units."""
+    scaled to forecast units.
+
+    Uses the published constant scalar by default. If a custom span is not in
+    the published table, the scalar is estimated from an expanding window.
+    """
     roll_max = prices.rolling(span, min_periods=span // 2).max()
     roll_min = prices.rolling(span, min_periods=span // 2).min()
     roll_mean = 0.5 * (roll_max + roll_min)
@@ -72,7 +89,9 @@ def breakout_forecast(
     raw = (prices - roll_mean) / (0.5 * width)
     raw = raw.ewm(span=max(span // 4, 1), min_periods=2).mean()
     if scalar is None:
-        scalar = BREAKOUT_SCALARS.get(span, AVG_ABS_FORECAST / raw.abs().mean())
+        scalar = BREAKOUT_SCALARS.get(span)
+        if scalar is None:  # span not in the published table → expanding-window fallback
+            return _cap(raw * _expanding_scalar_series(raw), cap)
     # raw is ~[-1, 1]; the published breakout scalar (~30) lifts mean|f| to ≈10.
     return _cap(raw * scalar, cap)
 

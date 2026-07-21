@@ -14,7 +14,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-_PARENT_DATA = Path("/Users/harshv.singh/TradingRecommendationSystem/backend/data")
+_PARENT_DATA = Path(
+    os.environ.get(
+        "SIGNAL_ENGINE_PARENT_DATA",
+        "/Users/harshv.singh/TradingRecommendationSystem/backend/data",
+    )
+)
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 

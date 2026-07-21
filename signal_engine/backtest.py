@@ -63,7 +63,7 @@ class BacktestResult:
     notional: pd.DataFrame
     forecasts: pd.DataFrame  # combined forecast per instrument
     turnover: pd.Series  # daily traded-notional / capital
-    instrument_corr: pd.DataFrame
+    instrument_corr: pd.DataFrame  # post-hoc full-sample correlation (reporting only)
     governor: pd.Series  # applied leverage multiplier (1.0 if disabled)
     overlay: pd.Series  # correlation-spike de-gross multiplier (1.0 if disabled)
     regime: pd.Series  # macro regime de-gross multiplier (1.0 if disabled)
@@ -73,6 +73,7 @@ class BacktestResult:
     config: Config
     gross_exposure: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))  # abs notional / capital
     financing_cost: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))  # daily % of capital
+    ai_evaluations: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())  # optional AI overlay records
 
 
 def _multiplier(sym: str, expanded: bool = False) -> float:
@@ -98,13 +99,21 @@ def _cost_per_symbol(symbols: list[str], config: Config) -> pd.Series:
 
 
 def _rule_weights(keys: list[str], config: Config) -> dict[str, float]:
-    """Use Config.rule_weights if supplied, otherwise equal weights."""
+    """Use Config.rule_weights if supplied, otherwise equal weights.
+
+    Partial user weights are merged with equal weights for missing keys and then
+    renormalised so they sum to 1.0.
+    """
     keys = list(keys)
     if not keys:
         return {}
-    if config.rule_weights and all(k in config.rule_weights for k in keys):
-        total = sum(config.rule_weights[k] for k in keys)
-        return {k: config.rule_weights[k] / total for k in keys}
+    if config.rule_weights:
+        merged = {}
+        for k in keys:
+            merged[k] = config.rule_weights.get(k, 1.0 / len(keys))
+        total = sum(merged.values())
+        if total > 0:
+            return {k: v / total for k, v in merged.items()}
     return _equal_rule_weights(keys)
 
 
@@ -414,6 +423,8 @@ def _execute_backtest(
         notional=sim["notional"],
         forecasts=forecasts,
         turnover=sim["turnover"],
+        # Post-hoc full-sample correlation matrix for reporting only. The IDM used
+        # for decisions is estimated on an expanding window inside the backtest.
         instrument_corr=returns.corr(),
         governor=governor,
         overlay=overlay,

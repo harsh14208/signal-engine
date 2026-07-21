@@ -63,7 +63,7 @@ def position_units(
 def apply_crypto_risk_cap(
     units: pd.DataFrame,
     prices: pd.DataFrame,
-    annual_return_vols: pd.DataFrame,
+    annual_return_vols: dict[str, pd.Series],
     config,
 ) -> pd.DataFrame:
     """Scale crypto positions so no single crypto instrument exceeds the configured
@@ -86,14 +86,10 @@ def apply_crypto_risk_cap(
         inst = instrument_for(sym)
         if inst is None or inst.asset_class != "crypto":
             continue
-        risk = (out[sym].abs() * prices[sym] * inst.multiplier * annual_return_vols[sym]).abs()
+        risk = (units[sym].abs() * prices[sym] * inst.multiplier * annual_return_vols[sym]).abs()
         frac = risk / budget
-        above = frac > config.crypto_max_risk_weight
-        if above.any():
-            scale = pd.Series(np.where(above, config.crypto_max_risk_weight / frac, 1.0), index=units.index)
-            # Forward-fill scale so a cap, once applied, doesn't flip back and forth
-            # on noise; only relax when the unconstrained position would be below cap.
-            out[sym] = out[sym] * scale
+        scale = (config.crypto_max_risk_weight / frac).clip(upper=1.0).fillna(1.0)
+        out[sym] = units[sym] * scale
     return out
 
 

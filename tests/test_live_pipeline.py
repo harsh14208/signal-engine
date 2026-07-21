@@ -73,6 +73,28 @@ class TestConfigAndRecords:
         assert record["idm"] > 0
         assert record["fdm"] > 0
 
+    def test_config_from_target_full_round_trip(self, backtest_result):
+        cfg = validated_config(
+            cot=False,
+            use_network_momentum=True,
+            use_xsmom=True,
+            use_crypto=True,
+            use_regime_overlay=True,
+            max_gross_notional=2.5,
+            financing_rate=0.01,
+            ewmac_speeds=((8, 32), (16, 64)),
+        )
+        record = build_target_record(backtest_result, cfg, book="challenger")
+        restored = config_from_target(record)
+        assert restored.use_cot is False
+        assert restored.use_network_momentum is True
+        assert restored.use_xsmom is True
+        assert restored.use_crypto is True
+        assert restored.use_regime_overlay is True
+        assert restored.max_gross_notional == pytest.approx(2.5)
+        assert restored.financing_rate == pytest.approx(0.01)
+        assert restored.ewmac_speeds == ((8, 32), (16, 64))
+
 
 class TestGenerateTarget:
     def test_generate_target_rejects_insufficient_history(self, tmp_path, full_prices, cot_panel):
@@ -382,6 +404,27 @@ class TestChallengerSemis:
     def test_executor_ignores_trailing_challenger(self, tmp_path):
         """The broker must trade the champion even when a challenger is written last —
         and refuse to run when no champion exists at all."""
+        from signal_engine.live import load_latest_target_for_book
+
+        targets = tmp_path / "targets.jsonl"
+        # Champion written first, challenger appended after (as forward_loop.sh does
+        # nightly) — the executor must still resolve to the champion, not the
+        # trailing challenger record.
+        targets.write_text(
+            json.dumps({"date": "2026-07-15", "book": "champion", "units": {"SPY": 5.0}})
+            + "\n"
+            + json.dumps(
+                {"date": "2026-07-15", "book": "challenger_semis", "units": {"SMH": 10.0}}
+            )
+            + "\n"
+        )
+        target = load_latest_target_for_book(targets, "champion")
+        assert target is not None
+        assert target["book"] == "champion"
+        assert target["units"] == {"SPY": 5.0}
+
+    def test_executor_refuses_without_champion(self, tmp_path):
+        """No champion record at all → the executor must refuse, not trade a challenger."""
         from scripts.execute_alpaca import main as exec_main
 
         targets = tmp_path / "targets.jsonl"

@@ -27,7 +27,7 @@ import pandas as pd
 
 from .backtest import run_backtest
 from .config import Config
-from .feature_store import DEFAULT_SNAPSHOT_DIR, load_snapshot, price_fingerprint
+from .feature_store import DEFAULT_SNAPSHOT_DIR, fingerprint_comparable, load_snapshot, price_fingerprint
 from .lineage import lineage_hash
 
 _CONFIG_FIELDS = ("capital", "vol_target", "buffer_fraction", "use_cot", "cot_momentum")
@@ -100,7 +100,7 @@ def replay_decision(
     units_ok = u_diff <= atol + rtol * u_scale
     forecast_ok = f_diff <= atol + rtol * f_scale
 
-    data_drift = stored_fp is not None and replay_fp != stored_fp
+    data_drift = fingerprint_comparable(stored_fp) and replay_fp != stored_fp
     lineage_drift = snapshot.get("lineage_hash") is not None and (
         snapshot["lineage_hash"] != lineage_hash()
     )
