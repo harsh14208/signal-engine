@@ -16,6 +16,7 @@ Exit codes: `0=PASS`, `1=CONDITIONAL`, `2=FAIL`, `3=error`. Pre-registered gates
 | **H1 clears_noise** (hard) | net Sharpe > placebo 95th-pct noise floor |
 | **H2 edge_real** (hard) | block-bootstrap 5th-pct Sharpe > 0 |
 | **H3 passes_deflated** (hard) | Deflated Sharpe passes at the honest trial count |
+| **H4 beats_buy_hold** (hard) | CAGR/MaxDD/Sharpe vs. a trivial SPY buy-and-hold, on a CAGR > MaxDD > Sharpe > Calmar priority (2026-07-22) |
 | **R1 cpcv_robust** | CPCV OOS 5th-pct > 0 and < 25% of paths below zero |
 | **R2 walk_forward_ok** | walk-forward mean OOS Sharpe > 0 and IS−OOS gap < 0.5 |
 | **R3 cost_headroom** | break-even cost ≥ 2× the assumed cost |
@@ -77,18 +78,20 @@ The whole *net* Sharpe rests on an assumed 1.5 bps/side. `signal_engine/friction
 Ported method mirrors TRS §104b: *measure* the real cost and stress the assumption;
 never silently change the constant.
 
-## What's next (unbuilt)
-Phase 2 (provider reliability, market calendar, point-in-time feature store),
-Phase 3 (replay-based decision-level drift detection), Phase 4 (HRP + PCA risk) —
-all justified only if the edge holds on real-futures data and a live track.
+## What's next
+Phase 2 (provider reliability, market calendar, point-in-time feature store) and
+Phase 3 (replay-based decision-level drift detection) are **shipped** — see
+`docs/PHASE2_DATA.md` / `docs/PHASE3_REPLAY.md`. Phase 4 (HRP + PCA risk) remains
+unbuilt, justified only if the edge holds on real-futures data and a live track.
 
 ### Research-only levers (not subjected to the full Phase 0 bar)
 
-Six additional optimizations from the research/patent sweep were implemented as
+Six additional optimizations from a 2026 research sweep were implemented as
 opt-in diagnostics: implementation-shortfall drift decomposition, warm-up/stateful-
 restart parity, quartile edge-decay kill switch, calibration smoothing, drawdown-
 state control, and trend-strength filter. A financed 3×-cap evaluation
 (`scripts/eval_optimizations.py`) found that **none improves walk-forward OOS
 Sharpe versus the baseline**, so they remain research flags. They were not run
 through the full Phase 0 honesty battery because the first OOS check already failed;
-running more tests would only increase false-discovery risk.
+running more tests would only increase false-discovery risk. See
+`docs/OPTIMIZATIONS.md`.

@@ -91,7 +91,7 @@ Do **not** promote bond-pack or corr-cluster variants to default without also se
 2. Their rankings improve on a like-for-like cost basis.
 3. They keep trade frequency and gross exposure in line with the baseline.
 
-## Cross-check against the six research/patent optimizations
+## Cross-check against the six research optimizations
 
 `scripts/eval_optimizations.py` re-ran the new opt-in levers (calibration smoothing,
 drawdown control, trend-strength filter, network momentum) under the same 3× cap +

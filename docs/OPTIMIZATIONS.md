@@ -1,10 +1,10 @@
 # Additional optimizations implemented
 
-This document tracks the six optimizations identified from `RESEARCH_LEVERS.md`, `PATENT_PRIOR_ART.md`, and the long-history weakness in `LONG_HISTORY.md`.
+This document tracks the six optimizations identified from `RESEARCH_LEVERS.md`, prior-art research on execution/monitoring control loops, and the long-history weakness in `LONG_HISTORY.md`.
 
 ## 1. Implementation-shortfall decomposition of drift
 
-**Source:** `PATENT_PRIOR_ART.md` (Perold TCA).
+**Source:** prior-art research on Perold-style transaction cost analysis (TCA).
 
 The reconciliation report now exposes the live-vs-model drift decomposition that was already computed by `monitor.decompose_drift`:
 
@@ -19,7 +19,7 @@ The reconciliation report now exposes the live-vs-model drift decomposition that
 
 ## 2. Warm-up / stateful-restart parity
 
-**Source:** `PATENT_PRIOR_ART.md` (QuantConnect restart divergence).
+**Source:** prior-art research on the QuantConnect restart-divergence failure mode.
 
 Added `Config.min_history_required()` and a guard in `live.generate_target()` that raises a clear error if the available price history is shorter than the longest lookback required by the enabled rules/overlays. This prevents a cold-started loop from silently producing different indicator state than a continuously-running loop.
 
@@ -27,7 +27,7 @@ Added `Config.min_history_required()` and a guard in `live.generate_target()` th
 
 ## 3. Quartile-based edge-decay flag
 
-**Source:** `RESEARCH_LEVERS.md` / `PATENT_PRIOR_ART.md` (arXiv 2604.18821).
+**Source:** `RESEARCH_LEVERS.md` and prior-art research (arXiv 2604.18821).
 
 `monitor.edge_decay_report` already reported `worst_quartile`; it can now drive the kill switch via `alarm_on_worst_quartile=True`. `scripts/reconcile.py` accepts `--alarm-on-worst-quartile`.
 

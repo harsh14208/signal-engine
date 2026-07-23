@@ -15,7 +15,7 @@ Validated wins (backtest-only, now awaiting forward confirmation): realised-vol
 **governor**, **30% position buffer**, **`--cot`**, **`--semis`**, **`--qqq`**, and
 **`--network-momentum`**. 🟢 **NEW — financing / leverage-cost model**
 (`--financing-rate`, `--financing-threshold`, `--max-gross`) so bond-pack additions
-are compared on a like-for-like cost basis. 🟢 **NEW — six research/patent
+are compared on a like-for-like cost basis. 🟢 **NEW — six research
 optimizations implemented as opt-in diagnostics**: drift decomposition, warm-up
 parity, quartile edge-decay, calibration smoothing, drawdown control, and
 trend-strength filter. **None improved walk-forward OOS Sharpe versus the financed
@@ -66,7 +66,7 @@ is the whole reason this engine beats the 0.15-Sharpe project it replaced.
 - [x] **Instrument-pack flags** — `--semis`, `--qqq`, `--diversifier-pack`,
       `--rate-pack`. Semis and QQQ are VALIDATED-POSITIVE; bond packs are leverage-
       dependent and must be evaluated with `--financing-rate`.
-- [x] **Six research/patent optimizations (diagnostic only)** — drift decomposition,
+- [x] **Six research optimizations (diagnostic only)** — drift decomposition,
       warm-up/restart parity, quartile edge-decay alarm, calibration smoothing, drawdown
       control, trend-strength filter. Implemented and evaluated under 3× cap + 1%
       financing; none improved OOS Sharpe versus baseline, so they remain opt-in.
@@ -104,11 +104,12 @@ noise). None of these require paid data.
    *Cost: small — the function is written and tested; only the data plumbing is missing.*
 
 3. [ ] **Auto-generate the research summary from the eval JSONs.** The prose has
-   already drifted from the data once: `FINAL_RESEARCH_SUMMARY.md` says Deflated
-   Sharpe clears; `experiment_results.md` records the baseline FAILING at
-   n_trials=100. A `scripts/build_summary.py` that renders the headline tables and
-   pass/fail verdicts straight from `data/options_evaluation_*.json` +
-   `experiments.jsonl` makes cherry-picking structurally impossible.
+   already drifted from the data once (the old `docs/FINAL_RESEARCH_SUMMARY.md`,
+   since removed as stale, said Deflated Sharpe clears while `experiment_results.md`
+   recorded the baseline FAILING at n_trials=100). A `scripts/build_summary.py`
+   that renders the headline tables and pass/fail verdicts straight from
+   `data/options_evaluation_*.json` + `experiments.jsonl` makes cherry-picking
+   structurally impossible.
    *Cost: small. Value: protects every future decision made by reading the docs.*
 
 4. [x] **PIT discipline for the COT panel (same bug class as prices).** This is

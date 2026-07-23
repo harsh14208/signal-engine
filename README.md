@@ -4,6 +4,14 @@ A diversified systematic **futures trend + carry** engine (Carver / AHL style) �
 now with a full forward-testing / paper-trading deployment on top of the
 research core.
 
+> **Not financial advice.** This is a personal research project: a from-scratch
+> systematic-trading engine and the honesty tooling (deflated Sharpe, walk-forward,
+> placebo tests, a buy-and-hold benchmark gate) built to keep it from lying to
+> itself. It currently trades a dedicated **paper** account only. Nothing here is
+> a recommendation to trade any instrument, and the engine's own validation
+> battery — documented throughout, including where it currently fails — is not a
+> track record.
+
 > **The one-sentence edge:** many small, *uncorrelated* risk-adjusted bets stack
 > into a portfolio Sharpe far higher than any single bet — because
 > diversification is the only free lunch in markets.
@@ -154,8 +162,8 @@ gives the real count: **n=141 trials**.
 Every other gate (noise floor, bootstrap, CPCV, walk-forward, cost-headroom)
 passes — only the deflated-Sharpe hard gate fails, and it fails **because the
 strategy space was searched more than the old bookkeeping admitted**, not
-because a new bug was found. `docs/EDGE_GATE.md` / `docs/FINAL_RESEARCH_SUMMARY.md`
-/ `todos.md` all carry this figure consistently.
+because a new bug was found. `docs/EDGE_GATE.md`, `experiment_results.md`, and
+`todos.md` all carry this figure consistently.
 
 **Consequences, currently in effect:**
 
@@ -181,9 +189,9 @@ because a new bug was found. `docs/EDGE_GATE.md` / `docs/FINAL_RESEARCH_SUMMARY.
 Asset-class **cluster weighting was tested and DROPPED** (hurts Sharpe and
 Calmar). The expanded 42-name universe and the combined `--ship-candidate`
 preset were tested and **not promoted** — they win on a single 70/30 split but
-lose on the honest walk-forward (see `docs/FINAL_RESEARCH_SUMMARY.md` for the
-full decomposition). Financing (below) is the dominant real-world constraint on
-any of these comparisons.
+lose on the honest walk-forward (see `experiment_results.md` for the full
+decomposition). Financing (below) is the dominant real-world constraint on any
+of these comparisons.
 
 ### H4 — does this beat doing nothing? (CAGR > MaxDD > Sharpe > Calmar)
 

@@ -106,7 +106,7 @@ All variants run with `--max-gross 3.0` unless noted.
 
 ---
 
-# Experiment results — six research/patent optimizations (with financing)
+# Experiment results — six research optimizations (with financing)
 
 Date: 2026-07-15
 Data: real ETF-proxy prices (cache), 2007–2026, core universe + semis/QQQ options pack.
