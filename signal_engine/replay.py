@@ -80,7 +80,17 @@ def replay_decision(
         from .data import load_prices
         from .markets import symbols
 
-        prices = load_prices(symbols(), start="2007-01-01", end=as_of,
+        # Non-champion books (e.g. challenger_semis) trade a WIDER universe than
+        # the core symbols() list (extra_symbols isn't itself persisted on the
+        # snapshot, but any stored unit/forecast key outside symbols() must have
+        # come from it). Missing these here silently reconstructs a SMALLER book
+        # with different diversification (IDM/FDM/governor), which can move every
+        # position's size — not just the missing instruments' — and gets
+        # misclassified as logic drift.
+        stored_keys = set(feats.get("units") or {}) | set(feats.get("forecast") or {})
+        core = symbols()
+        extra = sorted(k for k in stored_keys if k not in core)
+        prices = load_prices(core + extra, start="2007-01-01", end=as_of,
                              source=source, cache_tag="universe")
         prices = prices.loc[prices.index <= pd.Timestamp(as_of)]
         if cot is None and cfg.use_cot:

@@ -16,10 +16,16 @@ source .venv/bin/activate
 #    SMH/SOXX/XSD for the challenger_semis shadow book.
 python scripts/warm_cache.py --semis
 
-# 2. Generate target positions for the next session. --challenger-semis runs a
-#    parallel shadow book (champion config + semis pack) to earn FORWARD evidence
-#    for the pack; promotion waits on champion_challenger_report (>=60 days).
-python scripts/generate_targets.py --source auto --challenger-semis
+# 2. Generate target positions for the next session. --challenger runs a parallel
+#    shadow book with the COT lever flipped, to forward-test it against champion
+#    (resumed 2026-07-22 — had been generated once on 2026-07-10 and then dropped
+#    from this invocation when --challenger-semis was added, so it accrued no
+#    forward evidence for 12 days). --challenger-semis runs a parallel shadow book
+#    (champion config + semis pack) to earn FORWARD evidence for the pack;
+#    promotion waits on champion_challenger_report (>=60 days). Both are
+#    shadow-only (signal_engine.live.mark_all_shadow_returns) — execute_alpaca.py
+#    only ever submits real paper orders for the champion book.
+python scripts/generate_targets.py --source auto --challenger --challenger-semis
 
 # 3. Mark the shadow return for the day that just closed.
 python scripts/shadow_book.py --source auto
