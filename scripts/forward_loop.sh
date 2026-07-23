@@ -39,8 +39,17 @@ python scripts/detect_drift.py --source auto --enforce || true
 
 # 6. Submit orders to Alpaca PAPER to match the target (reads ALPACA_SE_* creds;
 #    respects the kill switch). Enabled 2026-06-29 for forward-test execution.
-#    --max-gross-mult 1.0 + --use-cash-balance sizes the book's notional cap
-#    against cash instead of equity (long leg fully cash-paid, smaller/more
-#    conservative book). Short legs, routine for this long/short trend book,
-#    still draw Reg-T margin buying power regardless of this flag.
-python scripts/execute_alpaca.py --paper --max-gross-mult 1.0 --use-cash-balance
+#    --max-gross-mult raised 1.0 -> 4.0 on 2026-07-22: validated_config() now
+#    models the book uncapped (natural gross ~3.9-4.3x median/mean, per the
+#    actual backtest distribution) with 1% financing — the configuration that
+#    clears the H4 beats_buy_hold gate (CAGR>MaxDD>Sharpe priority) against SPY.
+#    A cap of 1.0x had the real paper account running at roughly 1/4 the
+#    modeled book's risk, which is why "modeled Sharpe" never matched what was
+#    actually held. 4.0x also matches this account's real Reg-T buying power
+#    (~4x equity, confirmed via GET /v2/account) — the tail of the gross-
+#    exposure distribution (p90 6.7x, p99 9.7x) will still get scaled down on
+#    high-conviction days, same mechanism as before, just anchored higher.
+#    --use-cash-balance sizes the notional cap against cash instead of equity
+#    (long leg fully cash-paid). Short legs, routine for this long/short trend
+#    book, still draw Reg-T margin buying power regardless of this flag.
+python scripts/execute_alpaca.py --paper --max-gross-mult 4.0 --use-cash-balance

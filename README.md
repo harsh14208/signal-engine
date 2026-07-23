@@ -1,6 +1,8 @@
 # signal-engine
 
-A diversified systematic **futures trend + carry** engine (Carver / AHL style).
+A diversified systematic **futures trend + carry** engine (Carver / AHL style) —
+now with a full forward-testing / paper-trading deployment on top of the
+research core.
 
 > **The one-sentence edge:** many small, *uncorrelated* risk-adjusted bets stack
 > into a portfolio Sharpe far higher than any single bet — because
@@ -34,15 +36,18 @@ sizing layers) whose own honest statistics topped out at a forward Sharpe of
    turnover is a first-class control (no-trade **buffer**, monthly-ish trend
    speeds) and cost robustness is a headline metric.
 4. **Built on broken free data and never reconciled live vs backtest.** → *Here:*
-   a tiny, honest data layer with a deterministic synthetic generator so the
-   whole pipeline is verifiable offline, and an explicit data-honesty note for
-   carry (see §carry).
+   a tiny, honest data layer with a deterministic synthetic generator, a
+   point-in-time price/COT cache that never silently rewrites history, and —
+   as of the forward-deployment phase below — a live paper-trading loop that
+   reconciles actual returns against the model every day.
 5. **No crisp edge thesis (kitchen sink).** → *Here:* one sentence, at the top of
    this file, that every line of code serves.
 
-**Build discipline:** research-harness *first*. There is intentionally **no live
-broker / execution layer yet** — that gets written only after the edge survives
-real-data OOS + placebo. That sequencing is the whole point.
+**Build discipline:** research harness first, execution last, and every lever
+promoted on the walk-forward or on forward (live) evidence — never on a single
+backtest split. That sequencing is the whole point, and it's now also the whole
+point of how new levers get promoted into the default config (see
+[Promotion framework](#promotion-framework-edge_gatepy) below).
 
 ---
 
@@ -50,20 +55,24 @@ real-data OOS + placebo. That sequencing is the whole point.
 
 ```
 prices ─▶ returns ─▶ blended vol ─▶ rule forecasts ─▶ combine (FDM)
-       ─▶ vol-target sizing (IDM) ─▶ no-trade buffer ─▶ shift(1) ─▶ P&L − costs
+       ─▶ vol-target sizing (IDM) ─▶ overlays (regime/corr/COT) ─▶ governor
+       ─▶ no-trade buffer ─▶ shift(1) ─▶ P&L − costs − financing
 ```
 
 | Concept | Module | What it does |
 |---|---|---|
-| Volatility | `volatility.py` | Carver blended EW vol (70% recent / 30% long-run) — the denominator that lets gold and bonds speak one language |
-| Trend rules | `rules.py` | EWMAC crossover at 3 speeds + breakout, vol-normalised, scaled to mean \|f\|≈10, capped ±20 |
-| Carry rule | `rules.py` | Risk-adjusted annualised carry (term-structure driven — see §carry) |
+| Volatility | `volatility.py` | Carver blended EW vol (70% recent / 30% long-run), optional GARCH(1,1) blend |
+| Trend rules | `rules.py` | EWMAC crossover (3 speeds) + breakout + acceleration + cross-sectional momentum + network (lead-lag) momentum, vol-normalised, scaled to mean \|f\|≈10, capped ±20 |
+| Carry rule | `rules.py`, `carry_data.py` | Risk-adjusted annualised carry — synthetic (demo), free proxy (FRED/dividend yield), or real tenor-specific bond roll-down |
+| COT rule | `cot_data.py` | Free CFTC Commitments-of-Traders positioning, contrarian sign, PIT-stitched weekly cache — **validated-positive** |
 | Combine | `forecast.py` | Weighted sum × **FDM** (Forecast Diversification Multiplier) |
 | Sizing | `portfolio.py` | Volatility targeting + **IDM** (Instrument Diversification Multiplier) — *this is where diversification becomes return* |
+| Overlays | `portfolio.py`, `macro.py` | Correlation-spike de-risk, regime (VIX/drawdown/HMM), VIX-term structure, credit spread — all opt-in, none currently walk-forward-validated |
 | Turnover | `portfolio.py` | No-trade buffer band (expanding, no lookahead) |
-| Engine | `backtest.py` | No-lookahead P&L (positions decided at close *t-1*) net of costs |
+| Engine | `backtest.py` | No-lookahead P&L (positions decided at close *t-1*), net of costs and financing |
 | Metrics | `metrics.py` | Sharpe, MaxDD, CAGR, Calmar, Sortino, skew, turnover |
-| **Rigor** | `validation.py` | Lo (2002) CI · **Deflated Sharpe** · block-bootstrap MC · **random-walk placebo** — ported from the parent project |
+| **Rigor** | `validation.py` | Lo (2002) CI · **Deflated Sharpe** (honest trial count) · CPCV + **PBO** · block-bootstrap MC · **random-walk placebo** · paired walk-forward fold comparison |
+| **Promotion gate** | `edge_gate.py` | Hard gates (noise/bootstrap/deflated-Sharpe) + robustness gates (CPCV/walk-forward/cost-headroom) + forward-evidence gate — see below |
 | Reports | `report.py` | Headline + the **diversification report** (the edge made visible) |
 
 **IDM is the thesis in one line.** A basket of weakly-correlated instruments has
@@ -85,8 +94,9 @@ python -m signal_engine
 # + the full statistical honesty suite (Lo CI, Deflated Sharpe, MC, placebo)
 python -m signal_engine --validate
 
-# Chronological in-sample / out-of-sample split
+# Chronological in-sample / out-of-sample split, or purged walk-forward
 python -m signal_engine --oos 0.7 --validate
+python -m signal_engine --walk-forward 5
 
 # Real ETF-proxy data (needs network + `pip install -e .[data]`)
 python -m signal_engine --source yfinance --validate
@@ -96,7 +106,7 @@ Tests:
 
 ```bash
 pip install -e .[dev]
-pytest            # 40 tests
+pytest            # 284 tests across 30 files
 ruff check signal_engine tests
 ```
 
@@ -104,172 +114,313 @@ ruff check signal_engine tests
 
 The synthetic generator (`data.synthetic_prices`) is a **labelled test/demo DGP**
 with persistent trends and low correlation — it exists to prove the pipeline and
-the diversification *math* are correct and verifiable offline. A representative
-run:
+the diversification *math* are correct and verifiable offline. It is **not** a
+claim about live performance — that comes from real data (below). The honesty
+tooling is the product; the synthetic number is a fixture.
 
-```
-Mean standalone instrument Sharpe : 0.12   (no single bet is impressive)
-Mean pairwise correlation          : ~0.00–0.02  (low; idiosyncratic noise dominates)
-Portfolio Sharpe                   : 0.57
-Diversification ratio              : 4.7×   ← the whole thesis
-Deflated Sharpe (100 trials)       : 0.57 < 0.77  ⚠ FAILS  (the tooling has teeth)
-Random-walk placebo 95th pct       : 0.39  → real 0.57 ✅ clears the floor
-```
+### Real-data results (`--source cache`/`auto`, 2007–2026, core 19 ETF proxies)
 
-It is **not** a claim about live performance — that comes from `--source yfinance`
-on real history (below). The honesty tooling is the product; the synthetic number
-is a fixture.
-
-### Real-data results (`--source cache`, 2007–2026, 19 ETF proxies)
-
-Default config (trend-only, equal-weight, realised-vol governor ON, 30% buffer) on
-~4,900 days of actual prices:
+Default config (trend + COT, governor ON, 30% buffer) on ~4,900 days of actual
+prices — the live forward loop's own daily reconciliation reports currently show
+**modeled full-history Sharpe ≈ 0.71** (gross). The headline backtest table:
 
 | Metric | Value |
 |---|---|
-| **Net Sharpe** | **0.68** (gross 0.72) |
-| Realised vol | 21.1% (vs 20% target) |
-| Max drawdown | −36.3% |
-| Calmar | 0.35 |
-| Diversification ratio | 2.4× (mean standalone → portfolio 0.68) |
-| Lo 95% CI | [0.23, 1.13] — SR=0 outside ✅ |
-| Block-bootstrap P5 | 0.34 > 0 ✅ |
-| Random-walk placebo | clears (0.68 vs 0.37 floor) ✅ |
-| **Deflated Sharpe (16 _real_ trials)** | **0.68 > 0.54 ✅ clears at the honest trial count** |
-| Single 70/30 split IS/OOS | 0.75 / 0.51 — gap +0.24 ⚠ |
-| **Walk-forward (4-fold) mean OOS** | **0.59 — gap +0.14** ← the honest test |
+| **Net Sharpe** | **~0.69** (gross ~0.71–0.72) |
+| Max drawdown | ~ −36% to −38% |
+| Diversification ratio | ~2.4× |
+| Lo 95% CI | excludes 0 ✅ |
+| Block-bootstrap P5 | > 0 ✅ |
+| Random-walk placebo | clears ✅ |
+| CPCV / walk-forward | OOS positive, gap ~0.12–0.16 ✅ |
+| Cost break-even | clears 2× the assumed cost ✅ |
+| **Deflated Sharpe (honest n_trials)** | **❌ FAILS** — see below |
 
-**Read the walk-forward, not the single split.** A single 70/30 cut puts the entire
-hold-out in the choppy 2020–2026 window (OOS 0.51, gap +0.24 — pessimistic). The
-4-fold purged walk-forward — the honest multi-period test — gives **mean OOS 0.59,
-gap +0.14**. The Deflated Sharpe now uses the *actual logged* trial count (16, via
-`experiments.py`), not a placeholder, and the edge **clears it**; SR=0 is outside the
-Lo CI; it clears the random-walk placebo. This is a real ~0.6 out-of-sample edge.
+### ⚠️ The current honest verdict: Deflated Sharpe FAILS at the real trial count
+
+This is the most important thing to know about this project's current state,
+and it is exactly the kind of honesty the parent project lacked. On
+**2026-07-15** `validation.honest_n_trials()` was corrected: the trial registry
+that fed the Deflated-Sharpe calculation had only been counting **15** logged
+trials, while the actual search log (`experiments.jsonl`) held **153** raw
+config hashes. Unioning and de-duplicating both sources by effective config
+gives the real count: **n=141 trials**.
+
+| n_trials used | Deflated-Sharpe bar | Baseline net Sharpe (0.69) passes? |
+|---:|---:|:---|
+| 15 (stale registry) | ~0.53 | ✅ |
+| 141 (honest, corrected) | **~0.72** | **❌ FAILS** |
+
+Every other gate (noise floor, bootstrap, CPCV, walk-forward, cost-headroom)
+passes — only the deflated-Sharpe hard gate fails, and it fails **because the
+strategy space was searched more than the old bookkeeping admitted**, not
+because a new bug was found. `docs/EDGE_GATE.md` / `docs/FINAL_RESEARCH_SUMMARY.md`
+/ `todos.md` all carry this figure consistently.
+
+**Consequences, currently in effect:**
+
+- A **research moratorium** is in place: further backtest-only signal search is
+  paused, because each additional evaluated config raises the deflated-Sharpe
+  bar on the same edge (PBO across the 14 searched configs is **0.80**, well
+  past the 0.5 overfit-warning threshold).
+- The **long-history window** (1999–2026, ~27.5y) does clear H3 (deflated-max
+  0.60 vs net 0.74 — more data lowers the bar) but is presented as reassuring
+  context, not a reversal — the same config-search PBO caveat applies.
+- The **forward (live/shadow) track is now the primary evidence channel** for
+  anything new: see [Forward-testing & live paper trading](#forward-testing--live-paper-trading)
+  below. Forward evidence pays no deflation tax.
 
 **The ablation that set the defaults** (the discipline in action):
 
-| Config | Net Sharpe | MaxDD | Calmar | OOS |
-|---|---|---|---|---|
-| baseline (equal, no governor) | 0.54 | −49% | 0.23 | 0.57 |
-| + cluster weights | 0.49 ↓ | −50% | 0.19 ↓ | 0.42 ↓ |
-| **+ governor (default)** | **0.65 ↑** | **−36% ↑** | **0.34 ↑** | 0.51 |
+| Config | Net Sharpe | MaxDD | Calmar |
+|---|---|---|---|
+| baseline (equal weight, no governor) | 0.54 | −49% | 0.23 |
+| + cluster weights | 0.49 ↓ | −50% | 0.19 ↓ |
+| **+ governor (default)** | **0.65–0.69 ↑** | **~−36% ↑** | **0.34 ↑** |
 
-Asset-class **cluster weighting was tested and DROPPED**: equal-per-cluster
-overweights singleton/small clusters holding weak names (the lone −0.11-Sharpe
-REIT, the 2-name credit sleeve). Shipping a plausible-but-harmful knob is the exact
-mistake the parent project made 96 times — here it's a one-line research flag
-(`--cluster-weights`), off by default. The **governor** is the validated win.
+Asset-class **cluster weighting was tested and DROPPED** (hurts Sharpe and
+Calmar). The expanded 42-name universe and the combined `--ship-candidate`
+preset were tested and **not promoted** — they win on a single 70/30 split but
+lose on the honest walk-forward (see `docs/FINAL_RESEARCH_SUMMARY.md` for the
+full decomposition). Financing (below) is the dominant real-world constraint on
+any of these comparisons.
 
-### `--ship-candidate` and overlays — a single-split false dawn (kept honest)
+### H4 — does this beat doing nothing? (CAGR > MaxDD > Sharpe > Calmar)
 
-The `--ship-candidate` preset (expanded 42-ETF universe + regime overlay + 30%
-buffer) looks like a big win **on a single 70/30 split**: net SR 0.74, OOS **0.72**,
-gap +0.03. It is **not** a validated improvement — the walk-forward refutes it:
+Every gate above evaluates the edge in isolation. None of them ask the more
+basic question: **is this worth doing at all, versus just buying SPY?** A
+statistically real edge can still fail this — the headline Sharpe table above
+is computed with **zero leverage cost**, and the whole diversification thesis
+("IDM lets you lever a low-vol combined book to hit the vol target") only
+turns a Sharpe advantage into a CAGR advantage if that leverage is actually
+free, which it never is.
 
-| Config | Full Sh | Calmar | Divers | single-split OOS | **walk-fwd mean OOS** | WF gap |
-|---|---|---|---|---|---|---|
-| **default** (core 19) | 0.68 | 0.35 | 2.4× | 0.51 | **0.59** | **+0.14** |
-| + expanded universe (42) | 0.69 | 0.35 | 2.9× | 0.52 | 0.53 ↓ | +0.29 |
-| + regime overlay only | 0.69 | 0.36 | 2.4× | 0.54 | 0.59 | +0.14 |
-| ship-candidate (both) | 0.74 | 0.40 | 2.9× | **0.72** | **0.54 ↓** | +0.28 |
+`edge_gate.py`'s **H4 `beats_buy_hold`** gate checks this directly, and — this
+is the important part — on the priority order **CAGR > MaxDD > Sharpe >
+Calmar**, not Sharpe-first: it passes if CAGR beats SPY outright, *or* CAGR is
+within 2 points of SPY's *and* max drawdown is at least 10% smaller in
+magnitude. A real MaxDD win doesn't rescue a big CAGR shortfall (a hard 1x or
+3x leverage cap fails this even with much better drawdowns — see below); a
+close-enough CAGR with a meaningfully safer drawdown does pass, even if Sharpe
+trails.
 
-On the honest multi-fold test the ship-candidate's OOS (0.54) is **worse** than the
-plain default (0.59) with double the gap — its 0.72 single-split OOS was just the
-2020–2026 window flattering the expanded+regime combo. Decomposition: the **expanded
-universe** lifts the diversification *ratio* and IS Sharpe, but the younger/thinner
-ETFs over-fit IS (walk-forward OOS drops) **and** raise the placebo floor 0.37→0.56,
-so signal-to-noise actually *worsens* (0.74/0.56 = 1.3× vs the default's 0.68/0.37 =
-1.8×). The **regime overlay** is ~inert on the walk-forward.
+Swept across leverage levels, all at the 1% financing rate this project's own
+docs already call realistic:
 
-So `--ship-candidate` is a **research flag, not promoted** — the validated default
-(core 19, governor) wins on the honest test. The `--vix-term-overlay`
-(`^VIX9D/^VIX`, `^VIX3M/^VIX` term structure) and `--credit-overlay` (FRED `BAA10Y`)
-were likewise tested and **left opt-in** (no walk-forward improvement). The whole
-project's discipline in one line: **promote on the walk-forward, never the single
-split.**
+| Gross cap | CAGR | MaxDD | Sharpe | vs. SPY (11.11% CAGR, −55.2% MaxDD, 0.63 Sharpe) | H4 |
+|---|---|---|---|---|---|
+| 1.0x | 3.08% | −15.1% | 0.49 | far short on CAGR | ❌ FAIL |
+| 3.0x | 7.57% | −31.6% | 0.56 | still short on CAGR, even with much better MaxDD | ❌ FAIL |
+| **Uncapped (~4x, the validated default)** | **10.26%** | **−41.9%** | **0.57** | **CAGR close, MaxDD decisively better** | **✅ PASS** |
+
+The counter-intuitive result: capping leverage to control risk (1x, 3x) makes
+this **fail** H4, because it gives up too much CAGR for a drawdown improvement
+that isn't worth as much on this priority order. The uncapped configuration —
+this book's natural gross exposure, honestly financed — is the one that
+clears it, by nearly matching the index's return while drawing down ~13
+points less.
+
+This gate is why `validated_config()` (below) charges financing but does
+**not** cap gross notional, and why the real paper account's leverage was
+raised to match.
 
 ---
 
 ## §carry — the data-honesty note (the §84 lesson, applied from day one)
 
-Real carry needs the **futures term structure** (front vs deferred contract), and
-proper continuous back-adjusted futures need a **paid feed** (CSI / Norgate / a
-broker). The free ETF-proxy path cannot express true carry, so:
+Real carry needs the **futures term structure** (front vs deferred contract),
+and proper continuous back-adjusted futures need a **paid feed** (CSI /
+Norgate / a broker). The free ETF-proxy path cannot fully express true carry:
 
-- `rules.carry_forecast()` is fully implemented and unit-tested against a carry
-  series, and `--carry` wires a *synthetic* series for demonstration only.
-- The default trend-only book runs clean on free data and alone demonstrates the
-  diversification edge.
-- Populating carry with real term-structure data is the first paid-data upgrade
-  (the `Instrument.kind="future"` / `carry_kind` fields already anticipate it).
+- `rules.carry_forecast()` is fully implemented and unit-tested. `--carry`
+  wires a synthetic series for demonstration; `--carry-proxies` wires a free
+  FRED/dividend-yield proxy; `--real-bond-carry` wires tenor-specific
+  Treasury-curve roll-down carry (still a proxy, not a real futures curve).
+- The default trend(+COT)-only book runs clean on free data and alone
+  demonstrates the diversification edge.
+- Populating carry with real term-structure data remains the first paid-data
+  upgrade (the `Instrument.kind="future"` / `carry_kind` fields already
+  anticipate it).
 
 This is the same discipline that was missing before: name the data limit up
 front, don't fake the result.
 
 ---
 
+## Forward-testing & live paper trading
+
+This is the part the parent project never had: an automated nightly loop that
+runs the validated config against real closes, tracks a no-broker shadow book,
+reconciles live-vs-backtest, replay-checks every stored decision for code-level
+drift, and (once shadow tracking was confirmed) submits real paper orders to a
+dedicated Alpaca account.
+
+### The nightly loop (`scripts/forward_loop.sh`, launchd-scheduled)
+
+Runs daily (currently 3:00 PM PT / 6:00 PM ET — ~2h after the US close, giving
+price data time to settle without an excessive delay):
+
+1. **`warm_cache.py`** — refreshes the point-in-time price cache. yfinance
+   `auto_adjust=True` re-adjusts the *entire* history at every ex-dividend, so a
+   naive refresh would silently rewrite the past the engine already traded on.
+   The cache instead keeps every already-cached date **verbatim** and
+   ratio-stitches new rows onto that basis (`data.py`); rejected upstream
+   revisions are logged, not applied. The COT cache uses the same shared
+   point-in-time merge primitive (`_pit_merge`, `data.py`/`cot_data.py`).
+2. **`generate_targets.py`** — writes today's target position for three
+   parallel books, all from the shared config-generation path:
+   - **champion** — the validated default (core 19 + governor + 30% buffer + COT).
+   - **challenger** — champion with the COT lever flipped, to forward-test it
+     against champion head-to-head.
+   - **challenger_semis** — champion + the SMH/SOXX/XSD semis pack, forward-testing
+     a lever that ranked well on backtest but under a PBO=0.80 caveat.
+3. **`shadow_book.py`** — marks each book's next-day return with **no broker
+   costs** (a pure "did the model's math hold" check), independent of whether
+   any real order was ever submitted.
+4. **`reconcile.py`** — compares live vs modeled returns (gross for the shadow
+   book, net for the real broker path), reports correlation/tracking-error/drift,
+   a Perold-style drift decomposition (α / β-gap / residual), a worst-quartile
+   edge-decay flag, and an **input-revision check** — recomputes recent targets'
+   forecasts from today's data and flags any symbol whose stored value no
+   longer matches (catches *data* changing under a stored decision).
+5. **`detect_drift.py --enforce`** — Phase-3 **replay-based decision drift
+   detection**: re-derives every stored snapshot's decision from its
+   point-in-time feature snapshot and classifies any mismatch as `matched`
+   (healthy), `data` (the price/COT history was revised upstream — benign),
+   `lineage` (the data-handling regime changed), or `logic` (same inputs,
+   different output ⇒ the code changed — this is the alarming case). Only
+   `logic` drift engages the **kill switch** (`data/kill_switch.json`); it does
+   not auto-clear on a later clean run — clearing it is always a human,
+   documented decision.
+6. **`execute_alpaca.py`** — submits delta-notional paper orders (a *dedicated*
+   Alpaca paper account, isolated from any other trading system so positions on
+   overlapping tickers never net together) to match the **champion** book only —
+   the broker never trades a challenger. Respects the kill switch. Runs an
+   optional AI pre-trade evaluation (below) before sizing. `--max-gross-mult`
+   caps submitted gross notional at that multiple of account equity/cash
+   (`--use-cash-balance` sizes against cash so the long leg is fully cash-paid;
+   short legs still draw Reg-T margin regardless). Raised from **1.0x to 4.0x**
+   on 2026-07-22 to match both `validated_config()`'s natural gross exposure
+   (median ~3.9x) and this account's real Reg-T buying power (~4x equity) — a
+   1.0x cap had the real account running at roughly a quarter of the modeled
+   book's risk, which is why the daily "modeled Sharpe" never matched what was
+   actually held (see the H4 section above for why ~4x, not 1x or 3x, is the
+   leverage level that actually clears the buy-and-hold check).
+
+### AI pre-trade evaluator (`evaluator.py`, on by default in `execute_alpaca.py`)
+
+Before submitting orders, an LLM call (default: **Kimi / Moonshot AI**, via its
+OpenAI-compatible endpoint; a generic OpenAI-compatible provider is also
+supported) reviews the proposed book and returns a confidence/reasoning/scale
+verdict. It's an **advisory execution overlay**, not a replacement for the
+validated engine:
+
+- `--ai-mode advisory` — logs reasoning only, no effect on sizing.
+- `--ai-mode scale` (default) — multiplies the whole book by the returned scale
+  factor (0–1).
+- `--ai-mode block` — skips the rebalance entirely on a `reject` verdict (falls
+  back to no-op unless `--ai-required`).
+
+Falls back to a no-op evaluator (approve, scale=1.0) if no API key is
+configured. Every call is logged to `data/ai_evaluations.jsonl`.
+
+### Promotion framework (`edge_gate.py`)
+
+A candidate config (or a forward challenger book) only gets promoted to the
+default if it clears a structured gate, not a vibe:
+
+- **Hard gates** (any failure ⇒ overall FAIL): clears the random-walk noise
+  floor, block-bootstrap 5th-percentile Sharpe > 0, the **honest** Deflated
+  Sharpe (see above — this is the one currently failing for the base edge), and
+  **H4 beats_buy_hold** — CAGR/MaxDD/Sharpe vs. a trivial SPY buy-and-hold, on a
+  CAGR > MaxDD > Sharpe > Calmar priority rather than Sharpe-first (see the H4
+  section above).
+- **Robustness gates** (pass required for PASS, not just CONDITIONAL): CPCV
+  robustness, purged walk-forward OOS > 0 with a bounded IS/OOS gap, and cost
+  headroom ≥ 2× the assumed cost.
+- **Forward-evidence gate**: a challenger book is only promoted if it has
+  **won** — not merely survived — `champion_challenger_report` (≥60 forward
+  days *and* beating champion's Sharpe by a minimum margin), and the comparison
+  set's PBO must be ≤0.5. "Days accrued alone are not evidence... a challenger
+  that merely survives 60 days may have lost throughout" (`edge_gate.py`
+  docstring).
+
+### Artifacts
+
+| File | Purpose |
+|------|---------|
+| `data/live_targets.jsonl` | Date-stamped target units/notional/forecast/config per book. |
+| `data/live_returns.csv` | Realised daily shadow/live returns. |
+| `data/reconciliation/YYYY-MM-DD.json` | Daily correlation, tracking error, drift, edge-decay, input-revision report. |
+| `data/feature_snapshots/` | Point-in-time feature snapshots Phase-3 replay re-derives decisions from. |
+| `data/kill_switch.json` | `{"paused": true, ...}` with a documented root cause when a guardrail fires. |
+| `data/broker_orders.jsonl` | Submitted Alpaca paper orders. |
+| `data/ai_evaluations.jsonl` | AI pre-trade evaluation records. |
+| `data/price_revisions.jsonl`, `data/cot_revisions.jsonl` | Rejected upstream data revisions (PIT cache defence). |
+
+---
+
 ## Monitoring & flag taxonomy
 
-- **`--cot` (VALIDATED-POSITIVE):** free CFTC Commitments-of-Traders positioning is
-  the **first free signal to clear the walk-forward** (full 0.69→0.72, walk-forward
-  OOS 0.61→0.63, pre-specified contrarian sign). It's a per-instrument *rule* on ~10
-  macro-core ETFs combined via FDM — orthogonal to price (it's *positioning*), unlike
-  every overlay that came before it. Kept opt-in (needs a network fetch + the margin is
-  modest and fold-concentrated); recommended for promotion pending wider coverage.
+`--help` groups ~70 flags into:
 
-- **`--network-momentum` (VALIDATED-POSITIVE):** a price-only lead-lag graph signal
-  (follow the leader cross-sectional momentum). It adds a fourth orthogonal rule to
-  EWMAC/breakout, clears the walk-forward with no leverage increase, and needs no new
-  instrument data. Full sample 0.69→0.73, walk-forward OOS 0.63→0.67. **Shipped** as a
-  validated rule toggle.
+- **CORE** (shape the validated default): `--vol-target --buffer --cost-scheme
+  --weight-scheme --no-governor --governor-smooth`
+- **VALIDATED-POSITIVE** (opt-in, clears the walk-forward):
+  - `--cot` — free CFTC Commitments-of-Traders positioning, contrarian sign.
+    Full-history 0.69→0.72, walk-forward OOS 0.61→0.63. Forward-testing via the
+    `challenger` book (A/B against champion) before promotion.
+  - `--network-momentum` — price-only lead-lag graph momentum, a fourth
+    orthogonal rule alongside EWMAC/breakout. Full 0.69→0.73, WF OOS 0.63→0.67.
+    **Shipped.**
+  - `--semis` — adds SMH/SOXX/XSD. WF OOS 0.63→0.69. Forward-testing via the
+    `challenger_semis` book (PBO=0.80 caveat on the backtest ranking).
+  - `--qqq` — adds QQQ. WF OOS 0.63→0.68.
+- **RESEARCH** (tested, none beat the walk-forward, opt-in only): `--cluster-weights
+  --expanded-universe --empirical-scalars --regime-overlay --vix-term-overlay
+  --credit-overlay --hmm-regime-overlay --equity-momentum-sleeve
+  --curve-steepener --real-bond-carry --garch-vol --accel --xsmom --corr-spike
+  --carry-proxies --core-commodities --cot-momentum --ship-candidate
+  --drawdown-control --trend-strength-filter --calibration-smooth`
+- **INSTRUMENT PACKS** (leverage-dependent — compare only with `--financing-rate`
+  set): `--crypto` (BTC-USD/ETH-USD, risk-weight capped), `--curated-breadth`
+  (10 correlation-selected names), `--diversifier-pack --rate-pack` (bond/credit
+  ETFs — win on paper, shrink hard under realistic financing).
+- **VALIDATION / DIAGNOSTICS**: `--validate --oos --walk-forward --diagnostics
+  --monitor --n-trials --placebo --alarm-on-worst-quartile`
 
+Notes on the leverage-dependent packs: **`--financing-rate`** charges an annual
+spread on gross notional above `--financing-threshold` (default 1.0×). Without
+it, levered low-vol bond packs look like a free Sharpe improvement — 1%
+financing cuts baseline Net Sharpe roughly 0.65→0.54 and reshuffles the
+best-looking variants toward equity packs (`docs/FINANCING_AND_LEVERAGE.md`).
+**`--max-gross N`** applies a hard gross-notional cap for the same
+reality-check. A parked **VRP** (variance-risk-premium) data layer
+(`vrp_data.py`) exists but is not wired to the CLI — injecting a fat-tailed
+short-vol stream as a tradable instrument breaks the engine's vol-targeting;
+harvesting it needs a dedicated position-capped sizing path, not instrument
+injection.
 
-- **`--monitor`** prints the strategy's rolling 1-year Sharpe with an edge-decay
-  alarm; `monitor.reconcile(live, backtest)` scores live-vs-backtest agreement
-  (correlation / tracking error / drift) for when live returns exist — the
-  reconciliation harness the parent project never had. Recent additions: a Perold-
-  style drift decomposition (α / β-gap / residual) and a worst-quartile edge-decay
-  flag (`--alarm-on-worst-quartile`).
-- **`--semis` (VALIDATED-POSITIVE):** adds SMH/SOXX/XSD to the core universe.
-  Walk-forward OOS improves from 0.63 to 0.69, traded days increase, and gross
-  exposure stays in line with the baseline. **Shipped** as a validated instrument-pack
-  toggle.
+---
 
-- **`--qqq` (VALIDATED-POSITIVE):** adds QQQ (Nasdaq-100) to the core universe.
-  Walk-forward OOS improves from 0.63 to 0.68 with no leverage blow-up. **Shipped** as
-  a validated instrument-pack toggle.
+## Roadmap
 
-- **`--diversifier-pack`, `--rate-pack`** add cross-asset bond/credit/commodity
-  ETFs (BNDX/PFF/AMLP/MUB/EMLC and BNDX/MUB). They produce the highest uncapped
-  Sharpe but depend on levering low-vol bonds. Left as opt-in instrument packs; pair
-  with `--max-gross` to reality-check implementation feasibility.
-- **`--max-gross N`** applies a gross-notional exposure cap (e.g. `3.0` for 3×
-  capital) post-governor. Useful for reality-checking how much an apparent edge
-  depends on levering low-vol instruments; note that a tight cap lowers realized
-  vol and can push Sharpe below the Deflated-Sharpe bar.
-- **`--financing-rate R`** charges an annual spread on gross notional above
-  `--financing-threshold` (default 1.0). Without this, levered bond packs look like
-  a free Sharpe improvement. See `docs/FINANCING_AND_LEVERAGE.md` — the 1% case
-  reduces Sharpe by ~0.10–0.13 and reshuffles the best variants toward equity packs.
-- **Research-only overlays (diagnostic / opt-in):** drawdown-state control
-  (`--drawdown-control`), trend-strength filter (`--trend-strength-filter`), and
-  calibration smoothing (`--calibration-smooth`) are implemented but did **not**
-  improve walk-forward OOS Sharpe versus the financed baseline. They remain available
-  for experimentation. See `docs/OPTIMIZATIONS.md`.
-- **`--help` ends with a flag taxonomy**: CORE (validated) / VALIDATED-POSITIVE
-  (clears walk-forward, safe to ship) / RESEARCH (tested, none beat default) /
-  INSTRUMENT PACKS (leverage-dependent) / VALIDATION-DIAGNOSTICS. ~70 flags exist
-  but only a handful shape the validated default.
-- **VRP note:** a free VRP data layer exists (`vrp_data.py`, CBOE vol indices —
-  no options panel needed) but is **parked**: injecting a fat-tailed short-vol
-  stream as a tradable instrument detonates the engine's vol-targeting. Harvesting
-  VRP needs a dedicated position-capped sizing path, not instrument injection.
-
-## Roadmap (only after real-data OOS + placebo pass)
-
-1. Real futures term-structure feed → genuine carry across all asset classes.
-2. ~~Asset-class cluster weights~~ — *tried, hurt, dropped* (see ablation). Next:
-   a **correlation/Sharpe-aware** weighting (not asset-class), plus **governor
-   smoothing** to cut its added turnover (47x → 61x).
-3. Multiple-contract forecast mapping & roll handling.
-4. Live execution layer (broker, position reconciliation) — **last**, not first.
+1. Real futures term-structure feed → genuine carry across all asset classes
+   (the paid-data upgrade; the known-honest path to a materially bigger edge
+   now that the free-lever search is paused).
+2. Resolve the forward challengers: COT (`challenger`) and the semis pack
+   (`challenger_semis`) both need ≥60 forward days and to **win**, not just
+   survive, `champion_challenger_report` before promotion.
+3. A correlation/Sharpe-aware instrument weighting scheme (cluster weighting
+   was tried, hurt, and was dropped — this is the follow-up, still research).
+4. Multiple-contract forecast mapping & roll handling, once a real futures feed
+   exists.
+5. ~~Live execution layer~~ — **shipped**: dedicated Alpaca paper account, kill
+   switch, AI pre-trade evaluator, replay-based drift detection. Live (real
+   capital) trading remains gated on an extended, clean paper-trading record.
+6. ~~Validate against a trivial buy-and-hold benchmark~~ — **shipped**
+   (2026-07-22): the H4 gate above, and `validated_config()`/the real paper
+   account's leverage corrected to the configuration that actually clears it.
+   Worth re-checking periodically — H4 currently passes on a close-CAGR/
+   better-MaxDD basis, not by a wide margin, so it's not a permanently settled
+   question.

@@ -201,7 +201,12 @@ class TestEdgeGate:
 
         prices = synthetic_prices(symbols()[:8], n_days=900, seed=1)
         rep = evaluate_edge(prices, Config(), n_trials=100)
-        assert set(rep["hard_gates"]) == {"H1_clears_noise", "H2_edge_real", "H3_passes_deflated"}
+        assert set(rep["hard_gates"]) == {
+            "H1_clears_noise",
+            "H2_edge_real",
+            "H3_passes_deflated",
+            "H4_beats_buy_hold",
+        }
         assert set(rep["robustness_gates"]) == {
             "R1_cpcv_robust",
             "R2_walk_forward_ok",
@@ -220,3 +225,22 @@ class TestEdgeGate:
         rep = evaluate_edge(prices, Config(), n_trials=100, live_returns=live)
         assert rep["forward_track"] is not None
         assert rep["forward_track"]["n_days"] == 40
+
+    def test_h4_beats_buy_hold_populates_benchmark_metrics(self):
+        from signal_engine.edge_gate import evaluate_edge
+
+        prices = synthetic_prices(symbols()[:8], n_days=900, seed=1)
+        rep = evaluate_edge(prices, Config(), n_trials=100)
+        assert "H4_beats_buy_hold" in rep["hard_gates"]
+        assert rep["metrics"]["benchmark_symbol"] == "SPY"
+        assert rep["metrics"]["strategy_cagr"] is not None
+        assert rep["metrics"]["benchmark_cagr"] is not None
+
+    def test_h4_false_when_benchmark_symbol_absent(self):
+        from signal_engine.edge_gate import evaluate_edge
+
+        # Universe without SPY at all -> benchmark comparison is skipped, H4 fails closed.
+        prices = synthetic_prices(["IWM", "EFA", "EEM", "EWJ", "TLT", "IEF", "TIP", "GLD"], n_days=900, seed=1)
+        rep = evaluate_edge(prices, Config(), n_trials=100, benchmark_symbol="SPY")
+        assert rep["hard_gates"]["H4_beats_buy_hold"] is False
+        assert rep["metrics"]["strategy_cagr"] is None

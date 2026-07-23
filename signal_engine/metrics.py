@@ -64,6 +64,86 @@ def annual_turnover(turnover_daily: pd.Series) -> float:
     return float(_clean(turnover_daily).mean() * BUSINESS_DAYS_YEAR)
 
 
+def buy_and_hold_summary(prices: pd.Series) -> dict:
+    """Sharpe/CAGR/vol/MaxDD of simply buying and holding a single price series."""
+    p = prices.dropna()
+    if len(p) < 2:
+        return {
+            "sharpe": float("nan"), "cagr": float("nan"),
+            "ann_vol": float("nan"), "max_drawdown": float("nan"),
+        }
+    daily = p.pct_change().dropna()
+    equity = (1.0 + daily).cumprod()
+    return {
+        "sharpe": sharpe(daily), "cagr": cagr(equity),
+        "ann_vol": ann_vol(daily), "max_drawdown": max_drawdown(equity),
+    }
+
+
+def benchmark_comparison(
+    equity: pd.Series,
+    daily: pd.Series,
+    benchmark_prices: pd.Series,
+    *,
+    cagr_tolerance: float = 0.02,
+    min_drawdown_improvement: float = 0.10,
+) -> dict:
+    """Compare a strategy against a trivial buy-and-hold benchmark over the SAME
+    aligned date range — the "does this beat doing nothing" check no other gate
+    in this codebase asks. A real edge that fails this at realistic leverage/
+    financing costs doesn't justify the platform, however good its Sharpe looks
+    in isolation.
+
+    The pass condition (`beats_priority`) encodes CAGR > MaxDD > Sharpe > Calmar
+    as the optimization order, not Sharpe-first: it passes if the strategy beats
+    the benchmark's CAGR outright, OR its CAGR is within `cagr_tolerance`
+    (absolute, default 2 percentage points) of the benchmark's AND its max
+    drawdown is at least `min_drawdown_improvement` (default 10%) smaller in
+    magnitude — i.e. a strategy that nearly matches buy-and-hold CAGR while
+    drawing down meaningfully less is a genuine win on this priority, even if
+    its Sharpe or Calmar don't lead. Sharpe/Calmar remain reported but are not
+    gating criteria here.
+    """
+    d = _clean(daily)
+    if len(d) < 2:
+        return {"insufficient": True}
+    bench_prices = benchmark_prices.reindex(d.index).dropna()
+    if len(bench_prices) < 2:
+        return {"insufficient": True}
+    bench = buy_and_hold_summary(bench_prices)
+    strat_cagr = cagr(equity)
+    strat_sharpe = sharpe(d)
+    strat_maxdd = max_drawdown(equity)
+    bench_maxdd = bench["max_drawdown"]
+
+    beats_cagr = bool(strat_cagr > bench["cagr"])
+    beats_sharpe = bool(strat_sharpe > bench["sharpe"])
+    cagr_close = bool(strat_cagr >= bench["cagr"] - cagr_tolerance)
+    maxdd_meaningfully_better = bool(
+        not np.isnan(strat_maxdd)
+        and not np.isnan(bench_maxdd)
+        and bench_maxdd != 0
+        and abs(strat_maxdd) <= abs(bench_maxdd) * (1.0 - min_drawdown_improvement)
+    )
+    beats_priority = beats_cagr or (cagr_close and maxdd_meaningfully_better)
+
+    return {
+        "insufficient": False,
+        "strategy_cagr": strat_cagr,
+        "strategy_sharpe": strat_sharpe,
+        "strategy_max_drawdown": strat_maxdd,
+        "benchmark_cagr": bench["cagr"],
+        "benchmark_sharpe": bench["sharpe"],
+        "benchmark_max_drawdown": bench_maxdd,
+        "beats_cagr": beats_cagr,
+        "beats_sharpe": beats_sharpe,
+        "cagr_close": cagr_close,
+        "maxdd_meaningfully_better": maxdd_meaningfully_better,
+        "beats_priority": beats_priority,
+        "beats_both": beats_cagr and beats_sharpe,
+    }
+
+
 def summary(equity: pd.Series, daily: pd.Series, turnover: pd.Series | None = None) -> dict:
     out = {
         "sharpe": sharpe(daily),

@@ -11,6 +11,12 @@ Pre-registered criteria (fixed before looking at the result):
     H1 clears_noise      net Sharpe > placebo 95th-percentile noise floor
     H2 edge_real         block-bootstrap 5th-percentile Sharpe > 0
     H3 passes_deflated   Deflated Sharpe passes at the honest trial count
+    H4 beats_buy_hold    Beats a trivial SPY buy-and-hold on the priority order
+                         CAGR > MaxDD > Sharpe > Calmar (not Sharpe-first): a
+                         real, statistically significant edge still doesn't
+                         justify the platform if buying the index gets a
+                         similar or better CAGR with less drawdown, net of the
+                         leverage/financing cost this config actually uses.
 
   ROBUSTNESS gates (hard pass but any failure ⇒ CONDITIONAL, not PASS):
     R1 cpcv_robust       CPCV OOS 5th pct > 0 and < 25% of paths below zero
@@ -32,7 +38,7 @@ from .config import Config
 from .data_quality import audit_panel
 from .diagnostics import diversification_audit
 from .friction import cost_break_even
-from .metrics import sharpe
+from .metrics import benchmark_comparison, sharpe
 from .monitor import edge_decay_report
 from .validation import (
     block_bootstrap_sharpe,
@@ -68,6 +74,7 @@ def evaluate_edge(
     cot: pd.DataFrame | None = None,
     live_returns: pd.Series | None = None,
     n_trials: int | None = None,
+    benchmark_symbol: str | None = "SPY",
 ) -> dict[str, Any]:
     """Run the battery and return metrics, gate booleans, and an overall verdict."""
     config = config or Config()
@@ -90,11 +97,19 @@ def evaluate_edge(
     divers = diversification_audit(result)
     data_health = audit_panel(prices)
 
+    bench = {"insufficient": True}
+    if benchmark_symbol and benchmark_symbol in prices.columns:
+        bench = benchmark_comparison(result.equity, daily, prices[benchmark_symbol])
+
     # ── Gates ────────────────────────────────────────────────────────────────
     noise_floor = placebo.get("noise_floor_95", 0.0)
     h1 = net_sr > noise_floor
     h2 = bool(boot.get("edge_real")) if not boot.get("insufficient") else False
     h3 = bool(lo.get("passes_deflated")) if not lo.get("insufficient") else False
+    # CAGR > MaxDD > Sharpe > Calmar priority (not Sharpe-first): passes if the
+    # strategy beats the benchmark's CAGR outright, or nearly matches it while
+    # drawing down meaningfully less — see metrics.benchmark_comparison.
+    h4 = bool(bench.get("beats_priority")) if not bench.get("insufficient") else False
 
     r1 = (
         not cpcv.get("insufficient")
@@ -110,7 +125,12 @@ def evaluate_edge(
     headroom = breakeven.get("headroom_x")
     r3 = be is None or (headroom is not None and headroom >= 2.0)
 
-    hard = {"H1_clears_noise": h1, "H2_edge_real": h2, "H3_passes_deflated": h3}
+    hard = {
+        "H1_clears_noise": h1,
+        "H2_edge_real": h2,
+        "H3_passes_deflated": h3,
+        "H4_beats_buy_hold": h4,
+    }
     robustness = {"R1_cpcv_robust": r1, "R2_walk_forward_ok": r2, "R3_cost_headroom": r3}
 
     if not all(hard.values()):
@@ -149,6 +169,12 @@ def evaluate_edge(
             "idm_vs_effective": divers.get("idm_vs_effective"),
             "data_mean_health": data_health.get("mean_health"),
             "data_flagged": data_health.get("flagged_symbols"),
+            "benchmark_symbol": benchmark_symbol,
+            "strategy_cagr": bench.get("strategy_cagr"),
+            "strategy_max_drawdown": bench.get("strategy_max_drawdown"),
+            "benchmark_cagr": bench.get("benchmark_cagr"),
+            "benchmark_sharpe": bench.get("benchmark_sharpe"),
+            "benchmark_max_drawdown": bench.get("benchmark_max_drawdown"),
         },
         "forward_track": forward,
         "raw": {
@@ -159,6 +185,7 @@ def evaluate_edge(
             "cpcv": cpcv,
             "break_even": {k: v for k, v in breakeven.items() if k != "curve"},
             "diversification": divers,
+            "benchmark": bench,
         },
     }
 
@@ -257,6 +284,16 @@ def format_verdict(report: dict[str, Any]) -> str:
     lines.append(_row("H3 passes_deflated", report["hard_gates"]["H3_passes_deflated"],
                       f"net {m['net_sharpe']:.2f} vs deflated-max {m['deflated_expected_max']:.2f} "
                       f"(n_trials={m['n_trials']})"))
+    bench_sym = m.get("benchmark_symbol")
+    if m.get("strategy_cagr") is not None:
+        lines.append(_row("H4 beats_buy_hold", report["hard_gates"]["H4_beats_buy_hold"],
+                          f"CAGR {m['strategy_cagr']:.2%} vs {bench_sym} {m['benchmark_cagr']:.2%}, "
+                          f"MaxDD {m['strategy_max_drawdown']:.1%} vs {bench_sym} {m['benchmark_max_drawdown']:.1%}, "
+                          f"Sharpe {m['net_sharpe']:.2f} vs {bench_sym} {m['benchmark_sharpe']:.2f} "
+                          "(priority: CAGR > MaxDD > Sharpe)"))
+    else:
+        lines.append(_row("H4 beats_buy_hold", report["hard_gates"]["H4_beats_buy_hold"],
+                          f"no benchmark ({bench_sym}) in the traded universe"))
 
     lines.append("\n## Robustness gates (fail ⇒ CONDITIONAL)")
     lines.append(_row("R1 cpcv_robust", report["robustness_gates"]["R1_cpcv_robust"],

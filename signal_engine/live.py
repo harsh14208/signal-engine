@@ -109,6 +109,17 @@ def validated_config(cot: bool = True, **overrides: Any) -> Config:
 
     Default: core 19 ETFs + realised-vol governor + 30% buffer.  COT is opt-in
     but recommended because it is the first free lever to clear the walk-forward.
+
+    financing_rate=0.01 (1% annual, the project's own established realistic
+    convention — docs/FINANCING_AND_LEVERAGE.md) is set here because it's the
+    difference between the modeled book being an honest comparison and a free-
+    leverage fantasy: gross notional isn't capped (this book's natural ~4x
+    gross is the configuration that actually clears the H4 beats_buy_hold gate
+    against SPY on a CAGR>MaxDD>Sharpe priority, once financing is honestly
+    charged — a hard 1x/3x cap gives up too much CAGR for a drawdown win that
+    doesn't matter as much on that ordering). Previously this function set
+    neither, so every "modeled Sharpe"/shadow-book number quoted daily was the
+    zero-cost, uncapped-leverage scenario.
     """
     defaults = dict(
         capital=1_000_000.0,
@@ -121,6 +132,8 @@ def validated_config(cot: bool = True, **overrides: Any) -> Config:
         cost_bps=1.5,
         cost_scheme="flat",
         weight_scheme="equal",
+        financing_rate=0.01,
+        financing_threshold=1.0,
     )
     defaults.update(overrides)
     return Config(**defaults)
